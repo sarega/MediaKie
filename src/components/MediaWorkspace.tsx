@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { AIModel, GenerationLog, ModelParamConfig } from '../types';
-import { Sparkles, Upload, Download, Loader2, Settings2 } from 'lucide-react';
+import { AIModel, GenerationLog, estimateModelCredits } from '../types';
+import { Sparkles, Upload, Download, Loader2, Settings2, Wallet } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -131,6 +131,7 @@ export function MediaWorkspace({ selectedModel, onGenerate, isGenerating, latest
   };
 
   const showFileOutput = !isGenerating && latestLog?.status === 'success' && latestLog.mediaUrl;
+  const estimatedCredits = estimateModelCredits(selectedModel, paramValues, fileData?.type);
   
   const renderOutput = () => {
     if (isGenerating) {
@@ -435,11 +436,23 @@ export function MediaWorkspace({ selectedModel, onGenerate, isGenerating, latest
               ) : (
                 <>
                   <Sparkles className="w-4 h-4" />
+                  {estimatedCredits ? `${estimatedCredits} ` : ''}
                   Generate
                 </>
               )}
             </button>
           </div>
+          {estimatedCredits && (
+            <div className="flex items-center justify-end gap-2 text-xs text-neutral-400">
+              <Wallet className="w-3.5 h-3.5 text-emerald-400" />
+              <span>
+                Estimated generation cost: <span className="font-semibold text-neutral-200">{estimatedCredits} credits</span>
+              </span>
+              {selectedModel.creditEstimator?.label && (
+                <span className="text-neutral-600">({selectedModel.creditEstimator.label})</span>
+              )}
+            </div>
+          )}
         </div>
       </div>
     </div>

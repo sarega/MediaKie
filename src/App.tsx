@@ -69,6 +69,39 @@ const assignModelVideoInput = (inputPayload: Record<string, any>, model: AIModel
   return true;
 };
 
+const signatureValue = (value: any): any => {
+  if (typeof value === 'string') {
+    if (value.length > 256) {
+      return `${value.length}:${value.slice(0, 96)}:${value.slice(-96)}`;
+    }
+    return value;
+  }
+  if (Array.isArray(value)) return value.map(signatureValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(
+      Object.keys(value)
+        .sort()
+        .map((key) => [key, signatureValue(value[key])])
+    );
+  }
+  return value;
+};
+
+const buildGenerationSignature = (
+  model: AIModel,
+  prompt: string,
+  imageBase64?: string,
+  videoBase64?: string,
+  params?: Record<string, any>
+) => JSON.stringify({
+  modelId: model.id,
+  category: model.category,
+  prompt: prompt.trim(),
+  image: signatureValue(imageBase64 || ''),
+  video: signatureValue(videoBase64 || ''),
+  params: signatureValue(params || {}),
+});
+
 export default function App() {
   const [selectedModel, setSelectedModel] = useState<AIModel>(SUPPORTED_MODELS[0]);
   const [logs, setLogs] = useState<GenerationLog[]>([]);
@@ -80,8 +113,11 @@ export default function App() {
   const [historyBackfilled, setHistoryBackfilled] = useState(false);
   const [sourceAsset, setSourceAsset] = useState<SourceAsset | null>(null);
   const [frameGrabber, setFrameGrabber] = useState<{ url: string; time: number; duration: number } | null>(null);
+  const [isCreateTaskPending, setIsCreateTaskPending] = useState(false);
   const lastPersistedLogsRef = useRef('');
   const activePollsRef = useRef(new Set<string>());
+  const createTaskInFlightRef = useRef(false);
+  const lastSubmissionRef = useRef<{ signature: string; timestamp: number } | null>(null);
   const frameVideoRef = useRef<HTMLVideoElement>(null);
 
   const getKieHeaders = () => {
@@ -400,6 +436,24 @@ export default function App() {
   }, [historyLoaded, logs]);
 
   const handleGenerate = async (prompt: string, imageBase64?: string, videoBase64?: string, params?: Record<string, any>) => {
+    const submissionSignature = buildGenerationSignature(selectedModel, prompt, imageBase64, videoBase64, params);
+    const now = Date.now();
+    if (createTaskInFlightRef.current) {
+      console.warn('Ignored duplicate generate request while a task create request is already in flight.');
+      return;
+    }
+    if (
+      lastSubmissionRef.current?.signature === submissionSignature &&
+      now - lastSubmissionRef.current.timestamp < 30_000
+    ) {
+      console.warn('Ignored duplicate generate request with the same payload.');
+      return;
+    }
+
+    createTaskInFlightRef.current = true;
+    setIsCreateTaskPending(true);
+    lastSubmissionRef.current = { signature: submissionSignature, timestamp: now };
+
     const logEntry: GenerationLog = {
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
@@ -541,7 +595,15 @@ export default function App() {
         throw new Error(`${selectedModel.name} requires a source image.`);
       }
 
+      if (selectedModel.requiresImageInput && !finalImageStr) {
+        throw new Error(`${selectedModel.name} requires a source image.`);
+      }
+
       if (selectedModel.category === 'video-to-video' && !finalVideoStr) {
+        throw new Error(`${selectedModel.name} requires a source video.`);
+      }
+
+      if (selectedModel.requiresVideoInput && !finalVideoStr) {
         throw new Error(`${selectedModel.name} requires a source video.`);
       }
 
@@ -674,6 +736,10 @@ export default function App() {
         )
       );
     }
+    finally {
+      createTaskInFlightRef.current = false;
+      setIsCreateTaskPending(false);
+    }
   };
 
   return (
@@ -704,7 +770,7 @@ export default function App() {
         <MediaWorkspace 
           selectedModel={selectedModel} 
           onGenerate={handleGenerate} 
-          isGenerating={logs.length > 0 && logs[0].status === 'generating'}
+          isGenerating={isCreateTaskPending || (logs.length > 0 && logs[0].status === 'generating')}
           latestLog={logs[0]}
           sourceAsset={sourceAsset}
         />

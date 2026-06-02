@@ -54,7 +54,13 @@ export function ModelSidebar({
   }, []);
 
   const categories = Object.keys(groupedModels) as ModelCategory[];
-  const activeModels = groupedModels[activeCategory] || [];
+  const activeModels = useMemo(() => {
+    return [...(groupedModels[activeCategory] || [])].sort((a, b) => {
+      const byName = a.name.localeCompare(b.name, undefined, { sensitivity: 'base' });
+      if (byName !== 0) return byName;
+      return a.provider.localeCompare(b.provider, undefined, { sensitivity: 'base' });
+    });
+  }, [activeCategory, groupedModels]);
 
   useEffect(() => {
     setActiveCategory(selectedModel.category);

@@ -28,6 +28,11 @@ const getExtensionFromUrl = (url: string, fallbackType?: string) => {
   return fallbackType === 'video' ? 'mp4' : 'png';
 };
 
+const safeDownloadFilename = (filename: unknown) => {
+  const raw = typeof filename === 'string' && filename.trim() ? filename : 'download';
+  return raw.replace(/[\r\n"]/g, '').replace(/[\\/]/g, '-').slice(0, 180) || 'download';
+};
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT || 3000);
@@ -120,7 +125,47 @@ async function startServer() {
         return res.status(400).send('URL is required');
       }
 
-      const response = await fetch(targetUrl);
+      const filename = safeDownloadFilename(req.query.filename);
+      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
+
+      if (targetUrl.startsWith('/library/')) {
+        const filePath = path.join(libraryDir, path.basename(targetUrl));
+        const ext = path.extname(filePath).replace('.', '').toLowerCase();
+        const contentType = ext === 'mp4'
+          ? 'video/mp4'
+          : ext === 'webm'
+            ? 'video/webm'
+            : ext === 'mov'
+              ? 'video/quicktime'
+              : ext === 'jpg' || ext === 'jpeg'
+                ? 'image/jpeg'
+                : ext === 'webp'
+                  ? 'image/webp'
+                  : 'image/png';
+        res.setHeader('Content-Type', contentType);
+        const buffer = await fs.readFile(filePath);
+        return res.send(buffer);
+      }
+
+      if (targetUrl.startsWith('data:')) {
+        const matches = targetUrl.match(/^data:([^;]+);base64,(.+)$/);
+        if (!matches) {
+          return res.status(400).send('Invalid data URL format');
+        }
+        res.setHeader('Content-Type', matches[1]);
+        return res.send(Buffer.from(matches[2], 'base64'));
+      }
+
+      const absoluteTargetUrl = targetUrl.startsWith('/')
+        ? new URL(targetUrl, `${req.protocol}://${req.get('host')}`).toString()
+        : targetUrl;
+
+      const response = await fetch(absoluteTargetUrl, {
+        headers: {
+          'User-Agent': 'kie-media-studio/1.0',
+          'Accept': '*/*',
+        },
+      });
       if (!response.ok) {
         return res.status(response.status).send(`Failed to fetch file: ${response.statusText}`);
       }
@@ -129,9 +174,6 @@ async function startServer() {
       if (contentType) {
         res.setHeader('Content-Type', contentType);
       }
-      
-      const filename = req.query.filename || 'download';
-      res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
       // Stream the response to the client
       if (response.body) {

@@ -38,7 +38,10 @@ export function ActivityLog({ logs, onUseAsSource, onGrabVideoFrame, onDeleteLog
 
   return (
     <div className="flex flex-col divide-y divide-neutral-800/50">
-      {logs.map((log) => (
+      {logs.map((log) => {
+        const isSourceMedia = log.type === 'image' || log.type === 'video';
+
+        return (
         <div key={log.id} className="p-4 flex flex-col gap-2 hover:bg-neutral-800/30 transition-colors">
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
@@ -87,8 +90,9 @@ export function ActivityLog({ logs, onUseAsSource, onGrabVideoFrame, onDeleteLog
                 {(log.mediaUrls || [log.mediaUrl!]).slice(0, 4).map((url, idx) => (
                   <div
                     key={idx}
-                    draggable
+                    draggable={isSourceMedia}
                     onDragStart={(event) => {
+                      if (!isSourceMedia) return;
                       event.dataTransfer.effectAllowed = 'copy';
                       event.dataTransfer.setData('application/x-kie-media', JSON.stringify({ type: log.type, url }));
                     }}
@@ -100,13 +104,19 @@ export function ActivityLog({ logs, onUseAsSource, onGrabVideoFrame, onDeleteLog
                        <img src={url} alt={log.prompt} className="w-full h-auto max-h-32 object-cover" />
                      )}
                     <div className="absolute inset-x-1 bottom-1 flex justify-center gap-1 opacity-0 group-hover/media:opacity-100 transition-opacity">
-                      <button
-                        onClick={() => onUseAsSource({ type: log.type, url, label: log.modelName })}
-                        className="h-7 w-7 rounded-md bg-neutral-950/90 border border-white/10 text-white grid place-items-center hover:bg-neutral-800"
-                        title="Use as source"
-                      >
-                        <ImagePlus className="w-3.5 h-3.5" />
-                      </button>
+                      {isSourceMedia && (
+                        <button
+                          onClick={() => {
+                            if (log.type === 'image' || log.type === 'video') {
+                              onUseAsSource({ type: log.type, url, label: log.modelName });
+                            }
+                          }}
+                          className="h-7 w-7 rounded-md bg-neutral-950/90 border border-white/10 text-white grid place-items-center hover:bg-neutral-800"
+                          title="Use as source"
+                        >
+                          <ImagePlus className="w-3.5 h-3.5" />
+                        </button>
+                      )}
                       {log.type === 'video' && (
                         <button
                           onClick={() => onGrabVideoFrame(url)}
@@ -132,7 +142,8 @@ export function ActivityLog({ logs, onUseAsSource, onGrabVideoFrame, onDeleteLog
             </div>
           )}
         </div>
-      ))}
+        );
+      })}
     </div>
   );
 }
