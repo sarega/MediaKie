@@ -22,6 +22,7 @@ export interface AIModel {
   supportsVideoUpload?: boolean;
   requiresImageInput?: boolean;
   requiresVideoInput?: boolean;
+  allowsPromptlessGeneration?: boolean;
   imageInputKey?: string;
   imageInputMode?: 'single' | 'array';
   videoInputKey?: string;
@@ -262,14 +263,39 @@ const happyHorseImageToVideoParams: ModelParamConfig[] = [
   { name: 'Seed', key: 'seed', type: 'number', min: 0, max: 2147483647, step: 1, defaultValue: 0 }
 ];
 
+const veo31ModelOptions = [
+  { label: 'Veo 3.1 Fast', value: 'veo3_fast' },
+  { label: 'Veo 3.1 Quality', value: 'veo3' },
+  { label: 'Veo 3.1 Lite', value: 'veo3_lite' },
+];
+
 const veo31Params: ModelParamConfig[] = [
-  { name: 'Veo Model', key: 'model', type: 'select', options: [{ label: 'Quality', value: 'veo3' }, { label: 'Fast', value: 'veo3_fast' }], defaultValue: 'veo3_fast' },
-  { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: [{ label: '16:9', value: '16:9' }, { label: '9:16', value: '9:16' }, { label: 'Auto', value: 'auto' }], defaultValue: '16:9' },
-  { name: 'Generation Type', key: 'generationType', type: 'select', options: [{ label: 'Text to Video', value: 'TEXT_2_VIDEO' }, { label: 'First/Last Frames', value: 'FIRST_AND_LAST_FRAMES_2_VIDEO' }, { label: 'Reference to Video', value: 'REFERENCE_2_VIDEO' }], defaultValue: 'TEXT_2_VIDEO' },
+  { name: 'Veo Model', key: 'model', type: 'select', options: veo31ModelOptions, defaultValue: 'veo3_fast' },
+  { name: 'Generation Type', key: 'generationType', type: 'select', options: [{ label: 'Text to Video', value: 'TEXT_2_VIDEO' }, { label: 'Image to Video', value: 'FIRST_AND_LAST_FRAMES_2_VIDEO' }, { label: 'Reference to Video', value: 'REFERENCE_2_VIDEO' }], defaultValue: 'TEXT_2_VIDEO' },
+  { name: 'Start Frame URL', key: 'veo_start_frame_url', type: 'file', accept: 'image/*', defaultValue: '' },
+  { name: 'End Frame URL', key: 'veo_end_frame_url', type: 'file', accept: 'image/*', defaultValue: '' },
+  { name: 'Reference Image URL', key: 'veo_reference_image_urls', type: 'file', accept: 'image/*', defaultValue: '' },
+  { name: 'Aspect Ratio', key: 'aspectRatio', type: 'select', options: [{ label: 'Auto', value: 'auto' }, { label: '16:9', value: '16:9' }, { label: '9:16', value: '9:16' }], defaultValue: '16:9' },
+  { name: 'Resolution', key: 'resolution', type: 'select', options: [{ label: '720p', value: '720p' }, { label: '1080p', value: '1080p' }, { label: '4k', value: '4k' }], defaultValue: '720p' },
+  { name: 'Duration', key: 'duration', type: 'select', options: [{ label: '4s', value: '4' }, { label: '6s', value: '6' }, { label: '8s', value: '8' }], defaultValue: '8' },
   { name: 'Translate Prompt', key: 'enableTranslation', type: 'boolean', defaultValue: true },
   { name: 'Fallback', key: 'enableFallback', type: 'boolean', defaultValue: false },
   { name: 'Watermark', key: 'watermark', type: 'text', defaultValue: '' },
-  { name: 'Seed', key: 'seeds', type: 'number', min: 0, max: 2147483647, step: 1, defaultValue: 0 }
+  { name: 'Callback URL', key: 'callBackUrl', type: 'text', defaultValue: '' },
+  { name: 'Seed', key: 'seeds', type: 'number', min: 10000, max: 2147483647, step: 1, defaultValue: 10000 }
+];
+
+const veo31ExtendParams: ModelParamConfig[] = [
+  { name: 'Task ID', key: 'taskId', type: 'text', defaultValue: '' },
+  { name: 'Veo Model', key: 'model', type: 'select', options: veo31ModelOptions, defaultValue: 'veo3_fast' },
+  { name: 'Watermark', key: 'watermark', type: 'text', defaultValue: '' },
+  { name: 'Callback URL', key: 'callBackUrl', type: 'text', defaultValue: '' },
+  { name: 'Seed', key: 'seeds', type: 'number', min: 10000, max: 2147483647, step: 1, defaultValue: 10000 }
+];
+
+const veo31TaskOnlyParams: ModelParamConfig[] = [
+  { name: 'Task ID', key: 'taskId', type: 'text', defaultValue: '' },
+  { name: 'Callback URL', key: 'callBackUrl', type: 'text', defaultValue: '' }
 ];
 
 const geminiOmniVideoParams: ModelParamConfig[] = [
@@ -544,9 +570,25 @@ const veo31CreditEstimator: AIModel['creditEstimator'] = {
   creditsByParam: {
     key: 'model',
     values: {
+      veo3_lite: 60,
       veo3_fast: 60,
       veo3: 250,
     },
+    fallback: 60,
+  },
+  round: 'ceil',
+};
+
+const veo31ExtendCreditEstimator: AIModel['creditEstimator'] = {
+  label: 'Estimated from public Kie pricing',
+  creditsByParam: {
+    key: 'model',
+    values: {
+      veo3_lite: 60,
+      veo3_fast: 60,
+      veo3: 250,
+    },
+    fallback: 60,
   },
   round: 'ceil',
 };
@@ -684,6 +726,9 @@ export const SUPPORTED_MODELS: AIModel[] = [
   { id: 'wan/2-6-text-to-video', name: 'Wan 2.6', provider: 'Wan', category: 'text-to-video', params: wanTextToVideoParams },
   { id: 'wan/2-7-text-to-video', name: 'Wan 2.7', provider: 'Wan', category: 'text-to-video', params: wanTextToVideoParams, creditEstimator: wan27VideoCreditEstimator },
   { id: 'veo-3.1', name: 'Veo 3.1', provider: 'Google', category: 'text-to-video', params: veo31Params, creditEstimator: veo31CreditEstimator },
+  { id: 'veo/extend', name: 'Veo 3.1 Extend', provider: 'Google', category: 'text-to-video', params: veo31ExtendParams, creditEstimator: veo31ExtendCreditEstimator },
+  { id: 'veo/get-4k-video', name: 'Veo 3.1 Get 4K Video', provider: 'Google', category: 'video-to-video', allowsPromptlessGeneration: true, params: veo31TaskOnlyParams, creditEstimator: fixedCredits(120) },
+  { id: 'veo/get-1080p-video', name: 'Veo 3.1 Get 1080p Video', provider: 'Google', category: 'video-to-video', allowsPromptlessGeneration: true, params: veo31TaskOnlyParams, creditEstimator: fixedCredits(5) },
   { id: 'bytedance/v1-lite-text-to-video', name: 'Seedance V1 Lite', provider: 'Bytedance', category: 'text-to-video', params: bytedanceV1Params, creditEstimator: seedanceV1LiteCreditEstimator },
   { id: 'bytedance/v1-pro-text-to-video', name: 'Seedance V1 Pro', provider: 'Bytedance', category: 'text-to-video', params: bytedanceV1Params, creditEstimator: seedanceV1ProCreditEstimator },
   { id: 'bytedance/seedance-1.5-pro', name: 'Seedance 1.5 Pro', provider: 'Bytedance', category: 'text-to-video', params: seedance15Params, creditEstimator: seedance15CreditEstimator },

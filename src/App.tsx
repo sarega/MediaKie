@@ -69,6 +69,45 @@ const assignModelVideoInput = (inputPayload: Record<string, any>, model: AIModel
   return true;
 };
 
+const isVeoModel = (modelId: string) => modelId === 'veo-3.1' || modelId.startsWith('veo/');
+
+const getVeoCreateEndpoint = (modelId: string) => {
+  if (modelId === 'veo/extend') return '/api/kie/api/v1/veo/extend';
+  if (modelId === 'veo/get-4k-video') return '/api/kie/api/v1/veo/get-4k-video';
+  if (modelId === 'veo/get-1080p-video') return '/api/kie/api/v1/veo/get-1080p-video';
+  return '/api/kie/api/v1/veo/generate';
+};
+
+const normalizeVeoPayload = (inputPayload: Record<string, any>, category: AIModel['category']) => {
+  if (inputPayload.seeds !== undefined) {
+    const seed = Number(inputPayload.seeds);
+    inputPayload.seeds = Number.isFinite(seed) ? Math.max(10000, Math.trunc(seed)) : 10000;
+  }
+
+  const imageUrls = [
+    inputPayload.veo_start_frame_url,
+    inputPayload.veo_end_frame_url,
+    inputPayload.veo_reference_image_urls,
+  ].flatMap((value) => Array.isArray(value) ? value : [value]).filter(Boolean);
+
+  if (imageUrls.length > 0) {
+    inputPayload.imageUrls = imageUrls;
+  }
+
+  if (inputPayload.imageUrls?.length) {
+    if (inputPayload.generationType === 'TEXT_2_VIDEO' && category === 'image-to-video') {
+      inputPayload.generationType = 'FIRST_AND_LAST_FRAMES_2_VIDEO';
+    }
+    if (inputPayload.generationType === 'REFERENCE_2_VIDEO') {
+      inputPayload.imageUrls = imageUrls.length > 0 ? imageUrls : inputPayload.imageUrls;
+    }
+  }
+
+  delete inputPayload.veo_start_frame_url;
+  delete inputPayload.veo_end_frame_url;
+  delete inputPayload.veo_reference_image_urls;
+};
+
 const signatureValue = (value: any): any => {
   if (typeof value === 'string') {
     if (value.length > 256) {
@@ -364,7 +403,7 @@ export default function App() {
 
     try {
       const headers = getKieHeaders();
-      const isVeo = modelId === 'veo-3.1';
+      const isVeo = isVeoModel(modelId);
       let mediaUrl = '';
       let mediaUrls: string[] = [];
 
@@ -517,11 +556,15 @@ export default function App() {
       const finalImageStr = imageBase64 ? await getPublicUrl(imageBase64) : '';
 
       const normalizedParams: Record<string, any> = {};
+      const fileParamKeys = new Set((selectedModel.params || []).filter((param) => param.type === 'file').map((param) => param.key));
       for (const [key, value] of Object.entries(params || {})) {
         if (value === '' || value === null || value === undefined) continue;
-        const normalizedValue = typeof value === 'string' && value.startsWith('data:')
-          ? await getPublicUrl(value)
-          : value;
+        const shouldResolveMediaUrl = fileParamKeys.has(key);
+        const normalizedValue = shouldResolveMediaUrl && Array.isArray(value)
+          ? await Promise.all(value.map((item) => typeof item === 'string' ? getPublicUrl(item) : item))
+          : typeof value === 'string' && (value.startsWith('data:') || shouldResolveMediaUrl)
+            ? await getPublicUrl(value)
+            : value;
         normalizedParams[key] = arrayUrlParams.has(key) && !Array.isArray(normalizedValue)
           ? [normalizedValue]
           : normalizedValue;
@@ -599,7 +642,7 @@ export default function App() {
         throw new Error(`${selectedModel.name} requires a source image.`);
       }
 
-      if (selectedModel.category === 'video-to-video' && !finalVideoStr) {
+      if (selectedModel.category === 'video-to-video' && selectedModel.supportsVideoUpload && !finalVideoStr) {
         throw new Error(`${selectedModel.name} requires a source video.`);
       }
 
@@ -695,14 +738,32 @@ export default function App() {
       }
 
       if (selectedModel.id === 'veo-3.1') {
+        normalizeVeoPayload(inputPayload, selectedModel.category);
         if (selectedModel.category === 'text-to-video') {
           delete inputPayload.imageUrls;
         } else if (!inputPayload.imageUrls?.length) {
           throw new Error('Veo 3.1 image-to-video requires an uploaded image.');
         }
       }
+
+      if (selectedModel.id === 'veo/extend') {
+        normalizeVeoPayload(inputPayload, selectedModel.category);
+        if (!inputPayload.taskId) {
+          throw new Error('Veo 3.1 Extend requires a source task ID.');
+        }
+        if (!inputPayload.prompt) {
+          throw new Error('Veo 3.1 Extend requires a prompt.');
+        }
+      }
+
+      if (selectedModel.id === 'veo/get-4k-video' || selectedModel.id === 'veo/get-1080p-video') {
+        if (!inputPayload.taskId) {
+          throw new Error(`${selectedModel.name} requires a completed source task ID.`);
+        }
+        delete inputPayload.prompt;
+      }
       
-      const isVeo = selectedModel.id === 'veo-3.1';
+      const isVeo = isVeoModel(selectedModel.id);
       const requestBody = isVeo
         ? compactInput(inputPayload)
         : {
@@ -710,7 +771,7 @@ export default function App() {
           input: compactInput(inputPayload)
         };
 
-      const createRes = await fetch(isVeo ? `/api/kie/api/v1/veo/generate` : `/api/kie/api/v1/jobs/createTask`, {
+      const createRes = await fetch(isVeo ? getVeoCreateEndpoint(selectedModel.id) : `/api/kie/api/v1/jobs/createTask`, {
         method: 'POST',
         headers,
         body: JSON.stringify(requestBody),

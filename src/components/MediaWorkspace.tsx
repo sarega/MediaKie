@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { AIModel, GenerationLog, estimateModelCredits } from '../types';
-import { Sparkles, Upload, Download, Loader2, Settings2, Wallet } from 'lucide-react';
+import { Sparkles, Upload, Download, Loader2, Settings2, Wallet, Link2 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -55,7 +55,7 @@ export function MediaWorkspace({ selectedModel, onGenerate, isGenerating, latest
   }, [sourceAsset, selectedModel]);
 
   const handleGenerate = () => {
-    if (!prompt.trim() && !fileData) return;
+    if (!prompt.trim() && !fileData && !selectedModel.allowsPromptlessGeneration) return;
     
     const imageB64 = fileData?.type === 'image' ? fileData.b64 : undefined;
     const videoB64 = fileData?.type === 'video' ? fileData.b64 : undefined;
@@ -111,6 +111,35 @@ export function MediaWorkspace({ selectedModel, onGenerate, isGenerating, latest
     }
   };
 
+  const acceptsDroppedAsset = (accept: string | undefined, type: 'image' | 'video') => {
+    if (!accept || accept === '*/*') return true;
+    if (type === 'image') return accept.includes('image/*');
+    return accept.includes('video/*');
+  };
+
+  const applyParamSourceDrop = (event: React.DragEvent<HTMLDivElement>, paramKey: string, accept?: string) => {
+    const raw = event.dataTransfer.getData('application/x-kie-media');
+    if (!raw) return;
+
+    try {
+      const asset = JSON.parse(raw) as { type?: 'image' | 'video'; url?: string };
+      if (!asset.type || !asset.url || !acceptsDroppedAsset(accept, asset.type)) return;
+      event.preventDefault();
+      setParamValues((current) => ({ ...current, [paramKey]: asset.url }));
+    } catch (error) {
+      console.warn('Invalid dropped parameter source asset.', error);
+    }
+  };
+
+  const getParamPreviewKind = (accept: string | undefined, value: unknown) => {
+    if (typeof value !== 'string' || !value) return null;
+    if (accept?.includes('video/*')) return 'video';
+    if (accept?.includes('image/*')) return 'image';
+    if (value.startsWith('data:image/') || /\.(png|jpe?g|webp|gif)(?:$|\?)/i.test(value)) return 'image';
+    if (value.startsWith('data:video/') || /\.(mp4|webm|mov)(?:$|\?)/i.test(value)) return 'video';
+    return null;
+  };
+
   const downloadMedia = (url: string, filename: string) => {
     // Determine a basic extension from typical URLs or default to .mp4/.png
     let ext = '';
@@ -132,6 +161,7 @@ export function MediaWorkspace({ selectedModel, onGenerate, isGenerating, latest
 
   const showFileOutput = !isGenerating && latestLog?.status === 'success' && latestLog.mediaUrl;
   const estimatedCredits = estimateModelCredits(selectedModel, paramValues, fileData?.type);
+  const canSubmit = Boolean(prompt.trim() || fileData || selectedModel.allowsPromptlessGeneration);
   
   const renderOutput = () => {
     if (isGenerating) {
@@ -316,7 +346,39 @@ export function MediaWorkspace({ selectedModel, onGenerate, isGenerating, latest
                       </label>
                     )}
                     {param.type === 'file' && (
-                      <div className="flex items-center gap-2">
+                      <div
+                        className="rounded-lg border border-dashed border-neutral-800 bg-neutral-950/50 p-2 transition-colors hover:border-neutral-700"
+                        onDragOver={(event) => {
+                          if (!event.dataTransfer.types.includes('application/x-kie-media')) return;
+                          event.preventDefault();
+                          event.dataTransfer.dropEffect = 'copy';
+                        }}
+                        onDrop={(event) => applyParamSourceDrop(event, param.key, param.accept)}
+                      >
+                        {paramValues[param.key] && (
+                          <div className="mb-2 overflow-hidden rounded-md border border-neutral-800 bg-neutral-900">
+                            {getParamPreviewKind(param.accept, paramValues[param.key]) === 'video' ? (
+                              <video
+                                src={paramValues[param.key]}
+                                className="h-24 w-full object-cover"
+                                muted
+                                loop
+                                playsInline
+                              />
+                            ) : getParamPreviewKind(param.accept, paramValues[param.key]) === 'image' ? (
+                              <img
+                                src={paramValues[param.key]}
+                                alt={`${param.name} preview`}
+                                className="h-24 w-full object-cover"
+                              />
+                            ) : (
+                              <div className="flex h-16 items-center px-3 text-xs text-neutral-400">
+                                {String(paramValues[param.key]).split('/').pop() || 'Attached file'}
+                              </div>
+                            )}
+                          </div>
+                        )}
+                        <div className="flex items-center gap-2">
                         <button
                           className="px-3 py-1.5 rounded-md bg-neutral-800 hover:bg-neutral-700 text-sm border border-neutral-700 transition"
                           onClick={() => {
@@ -340,10 +402,17 @@ export function MediaWorkspace({ selectedModel, onGenerate, isGenerating, latest
                         </button>
                         {paramValues[param.key] && (
                           <div className="flex items-center gap-1">
-                            <span className="text-xs text-green-400 truncate w-20">Loaded</span>
+                            <span className="text-xs text-green-400 truncate w-20">
+                              {typeof paramValues[param.key] === 'string' && paramValues[param.key].startsWith('/library/') ? 'Library' : 'Loaded'}
+                            </span>
                             <button className="text-neutral-500 hover:text-red-400" onClick={() => setParamValues({...paramValues, [param.key]: ''})}>&times;</button>
                           </div>
                         )}
+                        </div>
+                        <div className="mt-2 flex items-center gap-1.5 text-[11px] text-neutral-500">
+                          <Link2 className="h-3 w-3" />
+                          <span>Drop matching media from Activity Log here</span>
+                        </div>
                       </div>
                     )}
                   </div>
@@ -420,7 +489,7 @@ export function MediaWorkspace({ selectedModel, onGenerate, isGenerating, latest
             
             <button
               onClick={handleGenerate}
-              disabled={isGenerating || (!prompt.trim() && !fileData)}
+              disabled={isGenerating || !canSubmit}
               className={cn(
                 "h-[60px] px-8 rounded-xl font-medium flex items-center gap-2 transition-all shrink-0 shadow-lg",
                 isGenerating 
