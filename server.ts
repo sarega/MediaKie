@@ -33,21 +33,91 @@ const safeDownloadFilename = (filename: unknown) => {
   return raw.replace(/[\r\n"]/g, '').replace(/[\\/]/g, '-').slice(0, 180) || 'download';
 };
 
+const safeProjectName = (name: unknown) => {
+  const raw = typeof name === 'string' ? name.trim() : '';
+  return raw.replace(/[\r\n"]/g, ' ').slice(0, 80) || 'Untitled Project';
+};
+
+const safeProjectId = (id: unknown) => {
+  return typeof id === 'string' && /^[a-zA-Z0-9_-]+$/.test(id) ? id : '';
+};
+
 async function startServer() {
   const app = express();
   const PORT = Number(process.env.PORT || 3000);
   const dataDir = path.join(process.cwd(), 'data');
-  const libraryDir = path.join(dataDir, 'library');
-  const historyPath = path.join(dataDir, 'history.json');
+  const legacyLibraryDir = path.join(dataDir, 'library');
+  const legacyHistoryPath = path.join(dataDir, 'history.json');
+  const projectsDir = path.join(dataDir, 'projects');
+  const defaultProjectId = 'default';
 
-  await fs.mkdir(libraryDir, { recursive: true });
+  const getProjectDir = (projectId: string) => path.join(projectsDir, projectId);
+  const getProjectLibraryDir = (projectId: string) => path.join(getProjectDir(projectId), 'library');
+  const getProjectHistoryPath = (projectId: string) => path.join(getProjectDir(projectId), 'history.json');
+  const getProjectMetaPath = (projectId: string) => path.join(getProjectDir(projectId), 'project.json');
+
+  const readJson = async (filePath: string, fallback: any) => {
+    try {
+      return JSON.parse(await fs.readFile(filePath, 'utf8'));
+    } catch {
+      return fallback;
+    }
+  };
+
+  const ensureProject = async (projectId: string, name = 'Untitled Project') => {
+    const projectDir = getProjectDir(projectId);
+    await fs.mkdir(getProjectLibraryDir(projectId), { recursive: true });
+    const metaPath = getProjectMetaPath(projectId);
+    const existing = await readJson(metaPath, null);
+    if (existing?.id) return existing;
+
+    const now = new Date().toISOString();
+    const project = { id: projectId, name: safeProjectName(name), createdAt: now, updatedAt: now };
+    await fs.writeFile(metaPath, JSON.stringify(project, null, 2));
+    await fs.writeFile(getProjectHistoryPath(projectId), JSON.stringify({ logs: [] }, null, 2)).catch(() => {});
+    return project;
+  };
+
+  const migrateLegacyProject = async () => {
+    await fs.mkdir(projectsDir, { recursive: true });
+    await ensureProject(defaultProjectId, 'Default Project');
+
+    const defaultHistoryPath = getProjectHistoryPath(defaultProjectId);
+    const legacy = await readJson(legacyHistoryPath, { logs: [] });
+    const currentDefault = await readJson(defaultHistoryPath, { logs: [] });
+    if (Array.isArray(legacy.logs) && legacy.logs.length > 0 && (!Array.isArray(currentDefault.logs) || currentDefault.logs.length === 0)) {
+      await fs.writeFile(defaultHistoryPath, JSON.stringify({ logs: Array.isArray(legacy.logs) ? legacy.logs : [] }, null, 2));
+    }
+
+    try {
+      const files = await fs.readdir(legacyLibraryDir);
+      const defaultLibraryDir = getProjectLibraryDir(defaultProjectId);
+      await fs.mkdir(defaultLibraryDir, { recursive: true });
+      await Promise.all(files.map(async (filename) => {
+        const from = path.join(legacyLibraryDir, filename);
+        const to = path.join(defaultLibraryDir, filename);
+        try {
+          await fs.access(to);
+        } catch {
+          await fs.copyFile(from, to).catch(() => {});
+        }
+      }));
+    } catch {}
+  };
+
+  await migrateLegacyProject();
 
   app.use(express.json({ limit: '50mb' })); // Support large base64/image payloads
-  app.use('/library', express.static(libraryDir));
+  app.use('/library', express.static(getProjectLibraryDir(defaultProjectId)));
+  app.use('/projects/:projectId/library', (req, res, next) => {
+    const projectId = safeProjectId(req.params.projectId);
+    if (!projectId) return res.status(404).send('Project not found');
+    express.static(getProjectLibraryDir(projectId))(req, res, next);
+  });
 
-  const readHistory = async () => {
+  const readHistory = async (projectId = defaultProjectId) => {
     try {
-      const raw = await fs.readFile(historyPath, 'utf8');
+      const raw = await fs.readFile(getProjectHistoryPath(projectId), 'utf8');
       const parsed = JSON.parse(raw);
       return Array.isArray(parsed.logs) ? parsed.logs : [];
     } catch {
@@ -55,46 +125,131 @@ async function startServer() {
     }
   };
 
-  const writeHistory = async (logs: unknown[]) => {
-    await fs.mkdir(dataDir, { recursive: true });
-    await fs.writeFile(historyPath, JSON.stringify({ logs }, null, 2));
+  const writeHistory = async (projectId: string, logs: unknown[]) => {
+    await ensureProject(projectId);
+    await fs.writeFile(getProjectHistoryPath(projectId), JSON.stringify({ logs }, null, 2));
+    const meta = await readJson(getProjectMetaPath(projectId), null);
+    if (meta?.id) {
+      await fs.writeFile(getProjectMetaPath(projectId), JSON.stringify({ ...meta, updatedAt: new Date().toISOString() }, null, 2));
+    }
   };
 
-  app.get('/api/history', async (_req, res) => {
-    res.json({ logs: await readHistory() });
+  const listProjects = async () => {
+    await migrateLegacyProject();
+    const ids = await fs.readdir(projectsDir).catch(() => []);
+    const projects = await Promise.all(ids.map((id) => readJson(getProjectMetaPath(id), null)));
+    return projects
+      .filter((project) => project?.id)
+      .sort((a, b) => String(b.updatedAt || '').localeCompare(String(a.updatedAt || '')));
+  };
+
+  const resolveLibraryFile = (mediaUrl: string, projectId = defaultProjectId) => {
+    if (mediaUrl.startsWith('/projects/')) {
+      const match = mediaUrl.match(/^\/projects\/([^/]+)\/library\/([^/?#]+)/);
+      if (!match) return null;
+      const matchedProjectId = safeProjectId(match[1]);
+      if (!matchedProjectId) return null;
+      return path.join(getProjectLibraryDir(matchedProjectId), path.basename(match[2]));
+    }
+    if (mediaUrl.startsWith('/library/')) {
+      return path.join(getProjectLibraryDir(projectId), path.basename(mediaUrl));
+    }
+    return null;
+  };
+
+  const libraryUrlFor = (projectId: string, filename: string) => {
+    return projectId === defaultProjectId ? `/library/${filename}` : `/projects/${projectId}/library/${filename}`;
+  };
+
+  app.get('/api/projects', async (_req, res) => {
+    res.json({ projects: await listProjects(), defaultProjectId });
   });
 
-  app.put('/api/history', async (req, res) => {
+  app.post('/api/projects', async (req, res) => {
+    const id = `p_${Date.now()}_${crypto.randomUUID().replace(/-/g, '')}`;
+    const project = await ensureProject(id, req.body?.name || 'Untitled Project');
+    res.json({ project });
+  });
+
+  app.patch('/api/projects/:projectId', async (req, res) => {
+    const projectId = safeProjectId(req.params.projectId);
+    if (!projectId) return res.status(400).json({ error: 'Invalid project id' });
+
+    const meta = await readJson(getProjectMetaPath(projectId), null);
+    if (!meta?.id) return res.status(404).json({ error: 'Project not found' });
+
+    const next = { ...meta, name: safeProjectName(req.body?.name), updatedAt: new Date().toISOString() };
+    await fs.writeFile(getProjectMetaPath(projectId), JSON.stringify(next, null, 2));
+    res.json({ project: next });
+  });
+
+  app.get('/api/projects/:projectId/history', async (req, res) => {
+    const projectId = safeProjectId(req.params.projectId);
+    if (!projectId) return res.status(400).json({ error: 'Invalid project id' });
+    await ensureProject(projectId);
+    res.json({ logs: await readHistory(projectId) });
+  });
+
+  app.put('/api/projects/:projectId/history', async (req, res) => {
+    const projectId = safeProjectId(req.params.projectId);
+    if (!projectId) return res.status(400).json({ error: 'Invalid project id' });
     const logs = Array.isArray(req.body?.logs) ? req.body.logs : [];
-    await writeHistory(logs);
+    await writeHistory(projectId, logs);
     res.json({ ok: true });
   });
 
-  app.delete('/api/history/:id', async (req, res) => {
-    const logs = await readHistory();
+  app.delete('/api/projects/:projectId/history', async (req, res) => {
+    const projectId = safeProjectId(req.params.projectId);
+    if (!projectId) return res.status(400).json({ error: 'Invalid project id' });
+
+    const logs = await readHistory(projectId);
+    for (const log of logs) {
+      const urls = Array.isArray(log.mediaUrls) ? log.mediaUrls : [log.mediaUrl].filter(Boolean);
+      for (const mediaUrl of urls) {
+        if (typeof mediaUrl === 'string') {
+          const filePath = resolveLibraryFile(mediaUrl, projectId);
+          if (filePath) await fs.unlink(filePath).catch(() => {});
+        }
+      }
+    }
+
+    await writeHistory(projectId, []);
+    res.json({ logs: [] });
+  });
+
+  app.delete('/api/projects/:projectId/history/:id', async (req, res) => {
+    const projectId = safeProjectId(req.params.projectId);
+    if (!projectId) return res.status(400).json({ error: 'Invalid project id' });
+
+    const logs = await readHistory(projectId);
     const removed = logs.filter((log: any) => log.id === req.params.id);
     const nextLogs = logs.filter((log: any) => log.id !== req.params.id);
 
     for (const log of removed) {
       const urls = Array.isArray(log.mediaUrls) ? log.mediaUrls : [log.mediaUrl].filter(Boolean);
       for (const mediaUrl of urls) {
-        if (typeof mediaUrl === 'string' && mediaUrl.startsWith('/library/')) {
-          await fs.unlink(path.join(libraryDir, path.basename(mediaUrl))).catch(() => {});
+        if (typeof mediaUrl === 'string') {
+          const filePath = resolveLibraryFile(mediaUrl, projectId);
+          if (filePath) await fs.unlink(filePath).catch(() => {});
         }
       }
     }
 
-    await writeHistory(nextLogs);
+    await writeHistory(projectId, nextLogs);
     res.json({ logs: nextLogs });
   });
 
-  app.post('/api/library/save-url', async (req, res) => {
+  app.post('/api/projects/:projectId/library/save-url', async (req, res) => {
     try {
+      const projectId = safeProjectId(req.params.projectId);
+      if (!projectId) return res.status(400).json({ error: 'Invalid project id' });
+      await ensureProject(projectId);
+
       const { url, type } = req.body || {};
       if (!url || typeof url !== 'string') {
         return res.status(400).json({ error: 'url is required' });
       }
-      if (url.startsWith('/library/')) {
+      if (url.startsWith('/library/') || url.startsWith('/projects/')) {
         return res.json({ url });
       }
 
@@ -108,7 +263,65 @@ async function startServer() {
       const ext = urlExt || getExtensionFromContentType(contentType, type);
       const filename = `${Date.now()}-${crypto.randomUUID()}.${ext}`;
       const buffer = Buffer.from(await response.arrayBuffer());
-      await fs.writeFile(path.join(libraryDir, filename), buffer);
+      await fs.writeFile(path.join(getProjectLibraryDir(projectId), filename), buffer);
+
+      res.json({ url: libraryUrlFor(projectId, filename) });
+    } catch (error) {
+      console.error('Project library save error:', error);
+      res.status(500).json({ error: 'Failed to save media locally' });
+    }
+  });
+
+  app.get('/api/history', async (_req, res) => {
+    res.json({ logs: await readHistory(defaultProjectId) });
+  });
+
+  app.put('/api/history', async (req, res) => {
+    const logs = Array.isArray(req.body?.logs) ? req.body.logs : [];
+    await writeHistory(defaultProjectId, logs);
+    res.json({ ok: true });
+  });
+
+  app.delete('/api/history/:id', async (req, res) => {
+    const logs = await readHistory(defaultProjectId);
+    const removed = logs.filter((log: any) => log.id === req.params.id);
+    const nextLogs = logs.filter((log: any) => log.id !== req.params.id);
+
+    for (const log of removed) {
+      const urls = Array.isArray(log.mediaUrls) ? log.mediaUrls : [log.mediaUrl].filter(Boolean);
+      for (const mediaUrl of urls) {
+        if (typeof mediaUrl === 'string') {
+          const filePath = resolveLibraryFile(mediaUrl, defaultProjectId);
+          if (filePath) await fs.unlink(filePath).catch(() => {});
+        }
+      }
+    }
+
+    await writeHistory(defaultProjectId, nextLogs);
+    res.json({ logs: nextLogs });
+  });
+
+  app.post('/api/library/save-url', async (req, res) => {
+    try {
+      const { url, type } = req.body || {};
+      if (!url || typeof url !== 'string') {
+        return res.status(400).json({ error: 'url is required' });
+      }
+      if (url.startsWith('/library/') || url.startsWith('/projects/')) {
+        return res.json({ url });
+      }
+
+      const response = await fetch(url);
+      if (!response.ok) {
+        return res.status(response.status).json({ error: `Failed to fetch media: ${response.statusText}` });
+      }
+
+      const contentType = response.headers.get('content-type');
+      const urlExt = getExtensionFromUrl(url, type);
+      const ext = urlExt || getExtensionFromContentType(contentType, type);
+      const filename = `${Date.now()}-${crypto.randomUUID()}.${ext}`;
+      const buffer = Buffer.from(await response.arrayBuffer());
+      await fs.writeFile(path.join(getProjectLibraryDir(defaultProjectId), filename), buffer);
 
       res.json({ url: `/library/${filename}` });
     } catch (error) {
@@ -128,8 +341,9 @@ async function startServer() {
       const filename = safeDownloadFilename(req.query.filename);
       res.setHeader('Content-Disposition', `attachment; filename="${filename}"`);
 
-      if (targetUrl.startsWith('/library/')) {
-        const filePath = path.join(libraryDir, path.basename(targetUrl));
+      if (targetUrl.startsWith('/library/') || targetUrl.startsWith('/projects/')) {
+        const filePath = resolveLibraryFile(targetUrl, defaultProjectId);
+        if (!filePath) return res.status(404).send('File not found');
         const ext = path.extname(filePath).replace('.', '').toLowerCase();
         const contentType = ext === 'mp4'
           ? 'video/mp4'

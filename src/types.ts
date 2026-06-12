@@ -59,6 +59,13 @@ export interface AIModel {
   };
 }
 
+export interface Project {
+  id: string;
+  name: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export const estimateModelCredits = (model: AIModel, params: Record<string, any>, sourceType?: 'image' | 'video') => {
   const estimator = model.creditEstimator;
   if (!estimator) return null;
@@ -231,7 +238,7 @@ const seedance2Params: ModelParamConfig[] = [
   { name: 'Reference Video URL', key: 'reference_video_urls', type: 'file', accept: 'video/*', defaultValue: '' },
   { name: 'Reference Audio URL', key: 'reference_audio_urls', type: 'file', accept: 'audio/*', defaultValue: '' },
   { name: 'Return Last Frame', key: 'return_last_frame', type: 'boolean', defaultValue: false },
-  { name: 'Generate Audio', key: 'generate_audio', type: 'boolean', defaultValue: false },
+  { name: 'Generate Audio', key: 'generate_audio', type: 'boolean', defaultValue: true },
   { name: 'Resolution', key: 'resolution', type: 'select', options: [{ label: '480p', value: '480p' }, { label: '720p', value: '720p' }, { label: '1080p', value: '1080p' }], defaultValue: '720p' },
   { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: [...aspectRatioOptions, { label: '4:3', value: '4:3' }, { label: '3:4', value: '3:4' }, { label: '21:9', value: '21:9' }], defaultValue: '16:9' },
   { name: 'Duration', key: 'duration', type: 'select', options: [{ label: '5s', value: 5 }, { label: '10s', value: 10 }, { label: '15s', value: 15 }], defaultValue: 5 },

@@ -8,8 +8,8 @@ import { ModelSidebar } from './components/ModelSidebar';
 import { MediaWorkspace } from './components/MediaWorkspace';
 import { ActivityLog } from './components/ActivityLog';
 import { SettingsModal } from './components/SettingsModal';
-import { SUPPORTED_MODELS, GenerationLog, AIModel } from './types';
-import { LayoutGrid, X } from 'lucide-react';
+import { SUPPORTED_MODELS, GenerationLog, AIModel, Project } from './types';
+import { Edit3, FolderOpen, LayoutGrid, Plus, Trash2, X } from 'lucide-react';
 
 const arrayUrlParams = new Set(['image_urls', 'input_urls', 'image_input', 'reference_image_urls', 'reference_video_urls', 'reference_audio_urls', 'video_urls']);
 type SourceAsset = { id: string; type: 'image' | 'video'; url: string; label?: string };
@@ -36,7 +36,7 @@ const normalizeResultUrls = (result: any): string[] => {
     try {
       parsed = JSON.parse(parsed);
     } catch {
-      return parsed.startsWith('http') || parsed.startsWith('/library/') ? [parsed] : [];
+      return parsed.startsWith('http') || parsed.startsWith('/library/') || parsed.startsWith('/projects/') ? [parsed] : [];
     }
   }
 
@@ -143,8 +143,12 @@ const buildGenerationSignature = (
 
 export default function App() {
   const [selectedModel, setSelectedModel] = useState<AIModel>(SUPPORTED_MODELS[0]);
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
+  const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
   const [logs, setLogs] = useState<GenerationLog[]>([]);
   const [showSettings, setShowSettings] = useState(false);
+  const [projectDialog, setProjectDialog] = useState<{ mode: 'create' | 'rename'; name: string } | null>(null);
   const [credits, setCredits] = useState<number | string | null>(null);
   const [creditError, setCreditError] = useState('');
   const [isLoadingCredits, setIsLoadingCredits] = useState(false);
@@ -158,6 +162,8 @@ export default function App() {
   const createTaskInFlightRef = useRef(false);
   const lastSubmissionRef = useRef<{ signature: string; timestamp: number } | null>(null);
   const frameVideoRef = useRef<HTMLVideoElement>(null);
+  const currentProject = projects.find((project) => project.id === currentProjectId) || null;
+  const projectApiUrl = (path: string) => new URL(path, window.location.origin).toString();
 
   const getKieHeaders = () => {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -198,50 +204,81 @@ export default function App() {
     }
   };
 
-  useEffect(() => {
-    const loadHistory = async () => {
-      try {
-        const res = await fetch('/api/history');
-        const data = await res.json();
-        const serverLogs = Array.isArray(data.logs) ? data.logs : [];
-        if (serverLogs.length > 0) {
-          lastPersistedLogsRef.current = JSON.stringify(serverLogs);
-          setLogs(serverLogs);
-          return;
-        }
-      } catch (error) {
-        console.warn('Failed to load server history, falling back to browser storage.', error);
-      }
+  const refreshProjects = async () => {
+    const res = await fetch(projectApiUrl('/api/projects'));
+    const data = await res.json();
+    const nextProjects = Array.isArray(data.projects) ? data.projects : [];
+    setProjects(nextProjects);
+    return { projects: nextProjects, defaultProjectId: data.defaultProjectId || 'default' };
+  };
 
+  useEffect(() => {
+    const loadProjects = async () => {
       try {
-        const saved = localStorage.getItem('kie_media_logs');
-        if (saved) {
-          const savedLogs = JSON.parse(saved);
-          lastPersistedLogsRef.current = JSON.stringify(savedLogs);
-          setLogs(savedLogs);
-        }
-      } catch {}
+        const { projects: loadedProjects, defaultProjectId } = await refreshProjects();
+        const savedProjectId = localStorage.getItem('kie_current_project_id');
+        const initialProjectId = loadedProjects.some((project) => project.id === savedProjectId)
+          ? savedProjectId
+          : loadedProjects[0]?.id || defaultProjectId;
+        setCurrentProjectId(initialProjectId);
+      } catch (error) {
+        console.warn('Failed to load projects.', error);
+        setCurrentProjectId(null);
+        setHistoryLoaded(true);
+      }
     };
 
-    loadHistory().finally(() => setHistoryLoaded(true));
+    loadProjects();
     fetchCredits();
   }, []);
 
   useEffect(() => {
-    if (!historyLoaded) return;
+    if (!currentProjectId) {
+      setLogs([]);
+      lastPersistedLogsRef.current = JSON.stringify([]);
+      setLoadedProjectId(null);
+      setHistoryLoaded(true);
+      return;
+    }
+
+    const loadProjectHistory = async () => {
+      setHistoryLoaded(false);
+      setHistoryBackfilled(false);
+      try {
+        const res = await fetch(projectApiUrl(`/api/projects/${encodeURIComponent(currentProjectId)}/history`));
+        const data = await res.json();
+        const serverLogs = Array.isArray(data.logs) ? data.logs : [];
+        lastPersistedLogsRef.current = JSON.stringify(serverLogs);
+        setLogs(serverLogs);
+        setLoadedProjectId(currentProjectId);
+        localStorage.setItem('kie_current_project_id', currentProjectId);
+      } catch (error) {
+        console.warn('Failed to load project history.', error);
+        lastPersistedLogsRef.current = JSON.stringify([]);
+        setLogs([]);
+        setLoadedProjectId(currentProjectId);
+      } finally {
+        setHistoryLoaded(true);
+      }
+    };
+
+    loadProjectHistory();
+  }, [currentProjectId]);
+
+  useEffect(() => {
+    if (!historyLoaded || !currentProjectId || loadedProjectId !== currentProjectId) return;
     const serializedLogs = JSON.stringify(logs);
     if (serializedLogs === lastPersistedLogsRef.current) return;
     lastPersistedLogsRef.current = serializedLogs;
-    localStorage.setItem('kie_media_logs', serializedLogs);
-    fetch('/api/history', {
+    fetch(projectApiUrl(`/api/projects/${encodeURIComponent(currentProjectId)}/history`), {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ logs }),
     }).catch((error) => console.warn('Failed to persist server history.', error));
-  }, [logs, historyLoaded]);
+  }, [logs, historyLoaded, currentProjectId, loadedProjectId]);
 
   useEffect(() => {
-    if (!historyLoaded) return;
+    if (!historyLoaded || loadedProjectId !== currentProjectId) return;
 
     setLogs((prev) => prev.map((log) => {
       if (log.status !== 'generating' || log.taskId) return log;
@@ -253,11 +290,14 @@ export default function App() {
         error: 'Generation was interrupted before the task ID was saved. Please generate it again.',
       };
     }));
-  }, [historyLoaded]);
+  }, [historyLoaded, loadedProjectId, currentProjectId]);
 
   const saveGeneratedMedia = async (url: string, type: 'image' | 'video') => {
     try {
-      const res = await fetch('/api/library/save-url', {
+      const endpoint = currentProjectId
+        ? projectApiUrl(`/api/projects/${encodeURIComponent(currentProjectId)}/library/save-url`)
+        : projectApiUrl('/api/library/save-url');
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ url, type }),
@@ -271,14 +311,14 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!historyLoaded || historyBackfilled || logs.length === 0) return;
+    if (!historyLoaded || loadedProjectId !== currentProjectId || historyBackfilled || logs.length === 0) return;
 
     const backfillRemoteMedia = async () => {
       let changed = false;
       const updatedLogs = await Promise.all(logs.map(async (log) => {
         if (log.status !== 'success') return log;
         const urls = (log.mediaUrls && log.mediaUrls.length > 0 ? log.mediaUrls : [log.mediaUrl]).filter(Boolean) as string[];
-        if (urls.length === 0 || urls.every((url) => url.startsWith('/library/') || url.startsWith('data:'))) return log;
+        if (urls.length === 0 || urls.every((url) => url.startsWith('/library/') || url.startsWith('/projects/') || url.startsWith('data:'))) return log;
 
         const localUrls = await Promise.all(urls.map((url) => saveGeneratedMedia(url, log.type)));
         if (localUrls.some((url, index) => url !== urls[index])) {
@@ -295,7 +335,7 @@ export default function App() {
     };
 
     backfillRemoteMedia();
-  }, [historyLoaded, historyBackfilled, logs]);
+  }, [historyLoaded, loadedProjectId, currentProjectId, historyBackfilled, logs]);
 
   const extractFrameFromVideo = (url: string) => {
     return new Promise<string>((resolve, reject) => {
@@ -392,7 +432,8 @@ export default function App() {
 
   const handleDeleteLog = async (id: string) => {
     setLogs((prev) => prev.filter((log) => log.id !== id));
-    fetch(`/api/history/${id}`, { method: 'DELETE' }).catch((error) => {
+    if (!currentProjectId) return;
+    fetch(projectApiUrl(`/api/projects/${encodeURIComponent(currentProjectId)}/history/${encodeURIComponent(id)}`), { method: 'DELETE' }).catch((error) => {
       console.warn('Failed to delete history item on server.', error);
     });
   };
@@ -466,15 +507,20 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!historyLoaded) return;
+    if (!historyLoaded || loadedProjectId !== currentProjectId) return;
     logs.forEach((log) => {
       if (log.status === 'generating' && log.taskId) {
         pollTaskResult(log.id, log.taskId, log.modelId, log.type);
       }
     });
-  }, [historyLoaded, logs]);
+  }, [historyLoaded, loadedProjectId, currentProjectId, logs]);
 
   const handleGenerate = async (prompt: string, imageBase64?: string, videoBase64?: string, params?: Record<string, any>) => {
+    if (!currentProjectId) {
+      alert('Open or create a project before generating media.');
+      return;
+    }
+
     const submissionSignature = buildGenerationSignature(selectedModel, prompt, imageBase64, videoBase64, params);
     const now = Date.now();
     if (createTaskInFlightRef.current) {
@@ -514,7 +560,7 @@ export default function App() {
         if (!dataUrl) return dataUrl;
         let uploadDataUrl = dataUrl;
 
-        if (!uploadDataUrl.startsWith('data:') && (uploadDataUrl.startsWith('/library/') || uploadDataUrl.startsWith('blob:'))) {
+        if (!uploadDataUrl.startsWith('data:') && (uploadDataUrl.startsWith('/library/') || uploadDataUrl.startsWith('/projects/') || uploadDataUrl.startsWith('blob:'))) {
           try {
             const response = await fetch(uploadDataUrl);
             if (!response.ok) {
@@ -803,6 +849,80 @@ export default function App() {
     }
   };
 
+  const createProject = async (name: string) => {
+    try {
+      const res = await fetch(projectApiUrl('/api/projects'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.project?.id) {
+        throw new Error(data.error || 'Failed to create project');
+      }
+      setProjects((current) => [data.project, ...current.filter((project) => project.id !== data.project.id)]);
+      setCurrentProjectId(data.project.id);
+    } catch (error: any) {
+      alert(error.message || 'Unable to create project.');
+    }
+  };
+
+  const renameProject = async (name: string) => {
+    if (!currentProject) return;
+    try {
+      const res = await fetch(projectApiUrl(`/api/projects/${encodeURIComponent(currentProject.id)}`), {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name }),
+      });
+      const data = await res.json();
+      if (!res.ok || !data.project?.id) {
+        throw new Error(data.error || 'Failed to rename project');
+      }
+      await refreshProjects();
+    } catch (error: any) {
+      alert(error.message || 'Unable to rename project.');
+    }
+  };
+
+  const handleProjectDialogSubmit = async (event: React.FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!projectDialog) return;
+    const name = projectDialog.name.trim() || 'Untitled Project';
+    if (projectDialog.mode === 'create') {
+      await createProject(name);
+    } else {
+      await renameProject(name);
+    }
+    setProjectDialog(null);
+  };
+
+  const handleClearProject = async () => {
+    if (!currentProjectId || !currentProject) return;
+    if (!window.confirm(`Clear the Activity Log and referenced local media for "${currentProject.name}"?`)) return;
+
+    try {
+      const res = await fetch(projectApiUrl(`/api/projects/${encodeURIComponent(currentProjectId)}/history`), { method: 'DELETE' });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Failed to clear project');
+      }
+      lastPersistedLogsRef.current = JSON.stringify([]);
+      setLogs([]);
+      await refreshProjects();
+    } catch (error: any) {
+      alert(error.message || 'Unable to clear project.');
+    }
+  };
+
+  const handleCloseProject = () => {
+    setCurrentProjectId(null);
+    setLoadedProjectId(null);
+    localStorage.removeItem('kie_current_project_id');
+    setLogs([]);
+    lastPersistedLogsRef.current = JSON.stringify([]);
+  };
+
   return (
     <div className="flex h-screen bg-neutral-950 text-neutral-100 font-sans overflow-hidden">
       {/* Sidebar - Models */}
@@ -839,18 +959,130 @@ export default function App() {
 
       {/* Right Sidebar - Activity Log */}
       <div className="w-80 bg-neutral-900 border-l border-neutral-800 flex flex-col shrink-0">
-        <div className="p-4 border-b border-neutral-800">
-          <h2 className="font-medium text-sm text-neutral-400 uppercase tracking-wider">Activity Log</h2>
+        <div className="p-4 border-b border-neutral-800 space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="font-medium text-sm text-neutral-400 uppercase tracking-wider">Activity Log</h2>
+            <button
+              onClick={() => setProjectDialog({ mode: 'create', name: `Project ${projects.length + 1}` })}
+              className="h-8 w-8 rounded-md bg-indigo-500 text-white grid place-items-center hover:bg-indigo-400 transition-colors"
+              title="New project"
+            >
+              <Plus className="w-4 h-4" />
+            </button>
+          </div>
+          <div className="rounded-lg border border-neutral-800 bg-neutral-950/60 p-3 space-y-2">
+            <div className="flex items-center gap-2 text-xs text-neutral-500">
+              <FolderOpen className="w-3.5 h-3.5 text-indigo-300" />
+              <span>Project</span>
+            </div>
+            <select
+              value={currentProjectId || ''}
+              onChange={(event) => setCurrentProjectId(event.target.value || null)}
+              className="w-full bg-neutral-950 border border-neutral-800 rounded-md px-2 py-2 text-sm text-neutral-100 focus:outline-none focus:border-indigo-500"
+            >
+              <option value="">No project open</option>
+              {projects.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+            <div className="grid grid-cols-3 gap-2">
+              <button
+                onClick={() => currentProject && setProjectDialog({ mode: 'rename', name: currentProject.name })}
+                disabled={!currentProject}
+                className="h-8 rounded-md border border-neutral-800 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100 disabled:opacity-40 disabled:hover:bg-transparent"
+                title="Rename project"
+              >
+                <Edit3 className="w-3.5 h-3.5 mx-auto" />
+              </button>
+              <button
+                onClick={handleClearProject}
+                disabled={!currentProject || logs.length === 0}
+                className="h-8 rounded-md border border-neutral-800 text-neutral-400 hover:bg-red-500/10 hover:text-red-300 disabled:opacity-40 disabled:hover:bg-transparent"
+                title="Clear project log"
+              >
+                <Trash2 className="w-3.5 h-3.5 mx-auto" />
+              </button>
+              <button
+                onClick={handleCloseProject}
+                disabled={!currentProject}
+                className="h-8 rounded-md border border-neutral-800 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100 disabled:opacity-40 disabled:hover:bg-transparent"
+                title="Close project"
+              >
+                <X className="w-3.5 h-3.5 mx-auto" />
+              </button>
+            </div>
+          </div>
         </div>
         <div className="flex-1 overflow-y-auto">
-          <ActivityLog
-            logs={logs}
-            onUseAsSource={useAsSource}
-            onGrabVideoFrame={handleGrabVideoFrame}
-            onDeleteLog={handleDeleteLog}
-          />
+          {currentProject ? (
+            <ActivityLog
+              logs={logs}
+              onUseAsSource={useAsSource}
+              onGrabVideoFrame={handleGrabVideoFrame}
+              onDeleteLog={handleDeleteLog}
+            />
+          ) : (
+            <div className="p-8 text-center text-sm text-neutral-500">
+              Open or create a project to view activity.
+            </div>
+          )}
         </div>
       </div>
+
+      {projectDialog && (
+        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-6">
+          <form
+            onSubmit={handleProjectDialogSubmit}
+            className="w-full max-w-sm rounded-xl border border-neutral-800 bg-neutral-950 shadow-2xl overflow-hidden"
+          >
+            <div className="px-5 py-4 border-b border-neutral-800 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-neutral-100">
+                  {projectDialog.mode === 'create' ? 'New Project' : 'Rename Project'}
+                </h3>
+                <p className="text-xs text-neutral-500 mt-1">Project logs and library media stay separate.</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setProjectDialog(null)}
+                className="p-2 rounded-md text-neutral-500 hover:text-white hover:bg-neutral-800"
+                title="Close"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 space-y-4">
+              <label className="space-y-2 block">
+                <span className="text-xs font-semibold uppercase tracking-wider text-neutral-500">Project Name</span>
+                <input
+                  autoFocus
+                  value={projectDialog.name}
+                  onChange={(event) => setProjectDialog((current) => current ? { ...current, name: event.target.value } : current)}
+                  className="w-full rounded-lg border border-neutral-800 bg-neutral-950 px-3 py-2 text-sm text-neutral-100 focus:outline-none focus:border-indigo-500"
+                  placeholder="Untitled Project"
+                />
+              </label>
+              <div className="flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setProjectDialog(null)}
+                  className="px-4 py-2 rounded-lg border border-neutral-800 text-sm text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 rounded-lg bg-indigo-500 text-sm font-medium text-white hover:bg-indigo-400"
+                >
+                  {projectDialog.mode === 'create' ? 'Create' : 'Save'}
+                </button>
+              </div>
+            </div>
+          </form>
+        </div>
+      )}
 
       <SettingsModal
         isOpen={showSettings}
