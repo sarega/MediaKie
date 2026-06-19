@@ -1,6 +1,6 @@
-# Kie Media Studio
+# Kai Media Studio
 
-Kie Media Studio is a local web app for generating images and videos with Kie.ai models.
+Kai Media Studio is a local web app for generating images and videos with Kie.ai models.
 
 ## Version
 
@@ -57,7 +57,7 @@ npm run start
 
 ### 1.0.0 — 2026-06-19
 
-- Renamed the app to Kie Media Studio.
+- Renamed the app to Kai Media Studio.
 - Removed old setup and branding references.
 - Saved the last selected model and model settings after reload.
 - Added a setting to turn video autoplay on or off.

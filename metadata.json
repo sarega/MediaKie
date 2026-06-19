@@ -1,5 +1,5 @@
 {
-  "name": "Kie Media Studio",
+  "name": "Kai Media Studio",
   "description": "A comprehensive media generation studio using Kie AI for image and video synthesis.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]

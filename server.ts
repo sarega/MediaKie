@@ -376,7 +376,7 @@ async function startServer() {
 
       const response = await fetch(absoluteTargetUrl, {
         headers: {
-          'User-Agent': 'kie-media-studio/1.0',
+          'User-Agent': 'kai-media-studio/1.0',
           'Accept': '*/*',
         },
       });
@@ -448,7 +448,7 @@ async function startServer() {
         },
         body: JSON.stringify({
           base64Data: dataUrl,
-          uploadPath: 'kie-media-studio',
+          uploadPath: 'kai-media-studio',
           fileName: filename,
         }),
       });
