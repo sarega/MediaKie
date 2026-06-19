@@ -141,13 +141,19 @@ const buildGenerationSignature = (
   params: signatureValue(params || {}),
 });
 
+const getSavedModel = () => {
+  const saved = localStorage.getItem('kie_selected_model');
+  return SUPPORTED_MODELS.find((model) => `${model.category}:${model.id}` === saved) || SUPPORTED_MODELS[0];
+};
+
 export default function App() {
-  const [selectedModel, setSelectedModel] = useState<AIModel>(SUPPORTED_MODELS[0]);
+  const [selectedModel, setSelectedModel] = useState<AIModel>(getSavedModel);
   const [projects, setProjects] = useState<Project[]>([]);
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
   const [logs, setLogs] = useState<GenerationLog[]>([]);
   const [showSettings, setShowSettings] = useState(false);
+  const [autoplayVideos, setAutoplayVideos] = useState(() => localStorage.getItem('kie_autoplay_videos') === 'true');
   const [projectDialog, setProjectDialog] = useState<{ mode: 'create' | 'rename'; name: string } | null>(null);
   const [credits, setCredits] = useState<number | string | null>(null);
   const [creditError, setCreditError] = useState('');
@@ -164,6 +170,10 @@ export default function App() {
   const frameVideoRef = useRef<HTMLVideoElement>(null);
   const currentProject = projects.find((project) => project.id === currentProjectId) || null;
   const projectApiUrl = (path: string) => new URL(path, window.location.origin).toString();
+
+  useEffect(() => {
+    localStorage.setItem('kie_selected_model', `${selectedModel.category}:${selectedModel.id}`);
+  }, [selectedModel]);
 
   const getKieHeaders = () => {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -493,6 +503,7 @@ export default function App() {
           mediaUrls: localMediaUrls,
         } : l))
       );
+      fetchCredits();
     } catch (error: any) {
       setLogs((prev) =>
         prev.map((l) =>
@@ -931,7 +942,7 @@ export default function App() {
           <div className="w-8 h-8 rounded-lg bg-indigo-500 flex items-center justify-center">
             <LayoutGrid className="w-5 h-5 text-white" />
           </div>
-          <h1 className="font-semibold text-lg tracking-tight">Media Studio</h1>
+          <h1 className="font-semibold text-lg tracking-tight">Kie Media Studio</h1>
         </div>
         <div className="flex-1 overflow-y-auto p-4 pb-0 flex flex-col">
           <ModelSidebar 
@@ -950,6 +961,7 @@ export default function App() {
       <div className="flex-1 flex flex-col min-w-0 bg-neutral-950 relative">
         <MediaWorkspace 
           selectedModel={selectedModel} 
+          autoplayVideos={autoplayVideos}
           onGenerate={handleGenerate} 
           isGenerating={isCreateTaskPending || (logs.length > 0 && logs[0].status === 'generating')}
           latestLog={logs[0]}
@@ -1019,6 +1031,7 @@ export default function App() {
           {currentProject ? (
             <ActivityLog
               logs={logs}
+              autoplayVideos={autoplayVideos}
               onUseAsSource={useAsSource}
               onGrabVideoFrame={handleGrabVideoFrame}
               onDeleteLog={handleDeleteLog}
@@ -1086,8 +1099,12 @@ export default function App() {
 
       <SettingsModal
         isOpen={showSettings}
+        autoplayVideos={autoplayVideos}
         onClose={() => setShowSettings(false)}
-        onSaveSettings={fetchCredits}
+        onSaveSettings={(nextAutoplayVideos) => {
+          setAutoplayVideos(nextAutoplayVideos);
+          fetchCredits();
+        }}
       />
 
       {frameGrabber && (

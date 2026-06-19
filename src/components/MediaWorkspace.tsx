@@ -6,13 +6,14 @@ import { motion, AnimatePresence } from 'motion/react';
 
 interface Props {
   selectedModel: AIModel;
+  autoplayVideos: boolean;
   onGenerate: (prompt: string, imageBase64?: string, videoBase64?: string, params?: Record<string, any>) => void;
   isGenerating: boolean;
   latestLog?: GenerationLog;
   sourceAsset?: { id: string; type: 'image' | 'video'; url: string; label?: string } | null;
 }
 
-export function MediaWorkspace({ selectedModel, onGenerate, isGenerating, latestLog, sourceAsset }: Props) {
+export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGenerating, latestLog, sourceAsset }: Props) {
   const [prompt, setPrompt] = useState('');
   
   // Base64 files
@@ -21,6 +22,7 @@ export function MediaWorkspace({ selectedModel, onGenerate, isGenerating, latest
   // Custom Parameters
   const [paramValues, setParamValues] = useState<Record<string, any>>({});
   const [showSettings, setShowSettings] = useState(false);
+  const initializedModelRef = useRef('');
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const uploadAccept = selectedModel.supportsImageUpload && selectedModel.supportsVideoUpload
@@ -30,15 +32,29 @@ export function MediaWorkspace({ selectedModel, onGenerate, isGenerating, latest
       : 'image/*';
 
   useEffect(() => {
-    // Reset or initialize params when model changes
-    const initialParams: Record<string, any> = {};
-    if (selectedModel.params) {
-      selectedModel.params.forEach(p => {
-        initialParams[p.key] = p.defaultValue;
-      });
+    const modelKey = `${selectedModel.category}:${selectedModel.id}`;
+    const storageKey = `kie_model_params:${modelKey}`;
+
+    if (initializedModelRef.current !== modelKey) {
+      initializedModelRef.current = modelKey;
+      let saved: Record<string, any> = {};
+      try {
+        saved = JSON.parse(localStorage.getItem(storageKey) || '{}');
+      } catch {
+        localStorage.removeItem(storageKey);
+      }
+      setParamValues(Object.fromEntries((selectedModel.params || []).map((param) => [
+        param.key,
+        param.type !== 'file' && param.key in saved ? saved[param.key] : param.defaultValue,
+      ])));
+      return;
     }
-    setParamValues(initialParams);
-  }, [selectedModel]);
+    if ((selectedModel.params || []).some((param) => !(param.key in paramValues))) return;
+
+    localStorage.setItem(storageKey, JSON.stringify(Object.fromEntries(
+      (selectedModel.params || []).filter((param) => param.type !== 'file').map((param) => [param.key, paramValues[param.key]])
+    )));
+  }, [selectedModel, paramValues]);
 
   useEffect(() => {
     if (!sourceAsset) return;
@@ -187,7 +203,7 @@ export function MediaWorkspace({ selectedModel, onGenerate, isGenerating, latest
                     src={url} 
                     className="max-w-full max-h-[70vh] rounded-lg shadow-2xl ring-1 ring-white/10 object-contain"
                     controls 
-                    autoPlay 
+                    autoPlay={autoplayVideos}
                     loop 
                   />
                 ) : (

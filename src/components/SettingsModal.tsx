@@ -4,24 +4,28 @@ import { motion, AnimatePresence } from 'motion/react';
 
 interface Props {
   isOpen: boolean;
+  autoplayVideos: boolean;
   onClose: () => void;
-  onSaveSettings: () => void;
+  onSaveSettings: (autoplayVideos: boolean) => void;
 }
 
-export function SettingsModal({ isOpen, onClose, onSaveSettings }: Props) {
+export function SettingsModal({ isOpen, autoplayVideos, onClose, onSaveSettings }: Props) {
   const [apiKey, setApiKey] = useState('');
+  const [autoplay, setAutoplay] = useState(autoplayVideos);
 
   useEffect(() => {
     if (isOpen) {
       const stored = localStorage.getItem('kie_client_api_key');
       if (stored) setApiKey(stored);
+      setAutoplay(autoplayVideos);
     }
-  }, [isOpen]);
+  }, [isOpen, autoplayVideos]);
 
   const handleSave = () => {
     const nextKey = apiKey.trim();
     localStorage.setItem('kie_client_api_key', nextKey);
-    onSaveSettings();
+    localStorage.setItem('kie_autoplay_videos', String(autoplay));
+    onSaveSettings(autoplay);
     onClose();
   };
 
@@ -57,6 +61,18 @@ export function SettingsModal({ isOpen, onClose, onSaveSettings }: Props) {
                 <h2 className="text-lg font-semibold text-white">Settings</h2>
                 <p className="text-xs text-neutral-400">Configure your connection to Kie AI</p>
               </div>
+              <label className="flex items-center justify-between gap-4 rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-3">
+                <div>
+                  <span className="block text-sm font-medium text-neutral-300">Autoplay videos</span>
+                  <span className="block text-xs text-neutral-500 mt-1">Play new results automatically</span>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={autoplay}
+                  onChange={(event) => setAutoplay(event.target.checked)}
+                  className="h-4 w-4 accent-indigo-500"
+                />
+              </label>
             </div>
 
             <div className="space-y-4">

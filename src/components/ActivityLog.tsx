@@ -5,6 +5,7 @@ import { AlertCircle, Clock, CheckCircle2, ExternalLink, ImagePlus, Trash2, Scan
 
 interface Props {
   logs: GenerationLog[];
+  autoplayVideos: boolean;
   onUseAsSource: (asset: { type: 'image' | 'video'; url: string; label?: string }) => void;
   onGrabVideoFrame: (url: string) => void;
   onDeleteLog: (id: string) => void;
@@ -19,7 +20,7 @@ const formatDuration = (ms: number) => {
   return `${remainingSeconds}s`;
 };
 
-export function ActivityLog({ logs, onUseAsSource, onGrabVideoFrame, onDeleteLog }: Props) {
+export function ActivityLog({ logs, autoplayVideos, onUseAsSource, onGrabVideoFrame, onDeleteLog }: Props) {
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -99,7 +100,7 @@ export function ActivityLog({ logs, onUseAsSource, onGrabVideoFrame, onDeleteLog
                     className="relative rounded-md overflow-hidden bg-neutral-900 border border-neutral-800 flex-1 min-w-[45%] group/media"
                   >
                      {log.type === 'video' ? (
-                       <video src={url} className="w-full h-auto max-h-32 object-cover" muted loop autoPlay playsInline />
+                       <video src={url} className="w-full h-auto max-h-32 object-cover" muted loop controls autoPlay={autoplayVideos} playsInline />
                      ) : (
                        <img src={url} alt={log.prompt} className="w-full h-auto max-h-32 object-cover" />
                      )}

@@ -1,21 +1,65 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://ai.google.dev/static/site-assets/images/share-ais-513315318.png" />
-</div>
-
 # Kie Media Studio
 
-This contains everything you need to run the media generation app locally.
+Kie Media Studio is a local web app for generating images and videos with Kie.ai models.
 
-View your app in AI Studio: https://ai.studio/apps/e857658f-730e-4dba-86ea-a1dc9b32da94
+## Version
 
-## Run Locally
+Current version: `1.0.0`
 
-**Prerequisites:**  Node.js
+## What is included
 
-1. Install dependencies:
-   `npm ci`
-2. Set `KIE_API_KEY` in [.env.local](.env.local), or enter it in the app's API settings modal.
-3. Run the app:
-   `npm run dev`
+- Text-to-image, image-to-image, text-to-video, image-to-video, and video-to-video workspaces
+- Kie API key setup from `.env.local` or the in-app settings panel
+- Model and parameter settings that stay saved after reload
+- Optional video autoplay setting
+- Credit counter refresh after reloads and completed generations
+- Project-based activity history
 
-The local server runs at http://localhost:3000.
+## How to use
+
+1. Install Node.js.
+2. Install dependencies:
+
+   ```bash
+   npm ci
+   ```
+
+3. Add your Kie API key in `.env.local`:
+
+   ```bash
+   KIE_API_KEY=your_api_key_here
+   ```
+
+   You can also enter the key inside the app settings.
+
+4. Start the app:
+
+   ```bash
+   npm run dev
+   ```
+
+5. Open the local app:
+
+   ```text
+   http://localhost:3000
+   ```
+
+6. Choose a mode, select a model, add your prompt or media input, then generate.
+
+## Build for production
+
+```bash
+npm run build
+npm run start
+```
+
+## Update log
+
+### 1.0.0 — 2026-06-19
+
+- Renamed the app to Kie Media Studio.
+- Removed old setup and branding references.
+- Saved the last selected model and model settings after reload.
+- Added a setting to turn video autoplay on or off.
+- Stopped videos from autoplaying by default.
+- Refreshed credits after app reloads and completed generations.
