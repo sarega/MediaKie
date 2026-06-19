@@ -3,6 +3,9 @@ import { AIModel, GenerationLog, ModelParamConfig, estimateModelCredits } from '
 import { Sparkles, Upload, Download, Loader2, Settings2, Wallet, Link2, Copy, Search, Check, Film, Scissors, Play, Pause, Trash2, StepBack, StepForward } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
+import { ClypraEditorHost } from './ClypraEditorHost';
+
+const USE_CLYPRA_EDITOR = import.meta.env.VITE_USE_CLYPRA_EDITOR === 'true';
 
 interface Props {
   selectedModel: AIModel;
@@ -542,7 +545,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
       }}
       onDrop={handleEditorDrop}
     >
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_320px]">
+      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_240px]">
         <div className="flex min-w-0 flex-col">
           <div className="flex-1 min-h-0 p-6">
             <div className="relative flex h-full items-center justify-center overflow-hidden rounded-lg border border-neutral-800 bg-black">
@@ -630,10 +633,10 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
           </div>
         </div>
 
-        <div className="border-l border-neutral-800 bg-neutral-900/50 p-5">
+        <div className="border-l border-neutral-800 bg-neutral-900/50 p-4">
           <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-500">Clip Controls</h3>
           {selectedClip ? (
-            <div className="mt-5 space-y-5">
+            <div className="mt-4 space-y-4">
               <div>
                 <p className="truncate text-sm font-medium text-neutral-100">{selectedClip.label}</p>
                 <p className="mt-1 text-xs text-neutral-500">Source length {formatSeconds(selectedClip.duration)}</p>
@@ -721,11 +724,13 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
       <div className="px-8 py-6 border-b border-neutral-800/50 flex justify-between items-center z-10 shrink-0">
         <div>
           <h2 className="text-2xl font-semibold tracking-tight text-white mb-1">
-            {workspaceMode === 'edit' ? 'Video Editor' : selectedModel.name}
+            {workspaceMode === 'edit' ? (USE_CLYPRA_EDITOR ? 'Clypra Editor' : 'Video Editor') : selectedModel.name}
           </h2>
           <p className="text-neutral-400 font-mono text-xs">
             {workspaceMode === 'edit'
-              ? 'Assemble, trim, split, and export generated clips'
+              ? USE_CLYPRA_EDITOR
+                ? 'Experimental Clypra adapter mount'
+                : 'Assemble, trim, split, and export generated clips'
               : `Powered by ${selectedModel.provider} • ${selectedModel.category.replace(/-/g, ' ')}`}
           </p>
         </div>
@@ -773,7 +778,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
       <div className="flex-1 w-full relative flex overflow-hidden">
         
         {workspaceMode === 'edit' ? (
-          renderVideoEditor()
+          USE_CLYPRA_EDITOR ? <ClypraEditorHost /> : renderVideoEditor()
         ) : (
           <div className="flex-1 w-full relative overflow-hidden flex items-center justify-center">
             <AnimatePresence mode="wait">

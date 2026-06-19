@@ -4,7 +4,7 @@ Kai Media Studio is a local web app for generating images and videos with Kie.ai
 
 ## Version
 
-Current version: `1.1.0`
+Current version: `1.2.0`
 
 ## What is included
 
@@ -57,6 +57,15 @@ npm run start
 ```
 
 ## Update log
+
+### 1.2.0 — 2026-06-19
+
+- Added collapsible, resizable model and activity panes with saved layout preferences.
+- Added an experimental Clypra editor host behind the `VITE_USE_CLYPRA_EDITOR=true` feature flag while retaining the existing editor by default.
+- Added typed asset, project, native media, and export adapter contracts for the Clypra integration boundary.
+- Added an isolated vendor-style Clypra module area without introducing new runtime dependencies.
+- Kept Clypra export intentionally stubbed until the native export pipeline is connected.
+- Reduced the clip controls inspector width and spacing in both editor implementations.
 
 ### 1.1.0 — 2026-06-19
 

@@ -9,10 +9,25 @@ import { MediaWorkspace } from './components/MediaWorkspace';
 import { ActivityLog } from './components/ActivityLog';
 import { SettingsModal } from './components/SettingsModal';
 import { SUPPORTED_MODELS, GenerationLog, AIModel, Project } from './types';
-import { Edit3, FolderOpen, LayoutGrid, Plus, Trash2, X } from 'lucide-react';
+import { Edit3, FolderOpen, GripVertical, LayoutGrid, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, Trash2, X } from 'lucide-react';
 
 const arrayUrlParams = new Set(['image_urls', 'input_urls', 'image_input', 'mask_url', 'reference_image_urls', 'reference_video_urls', 'reference_audio_urls', 'video_urls']);
 type SourceAsset = { id: string; type: 'image' | 'video'; url: string; label?: string };
+type PaneSide = 'left' | 'right';
+
+const PANE_WIDTHS = {
+  leftDefault: 288,
+  rightDefault: 320,
+  min: 240,
+  max: 520,
+};
+
+const clampPaneWidth = (value: number) => Math.min(PANE_WIDTHS.max, Math.max(PANE_WIDTHS.min, value));
+
+const readStoredPaneWidth = (key: string, fallback: number) => {
+  const value = Number(localStorage.getItem(key));
+  return Number.isFinite(value) ? clampPaneWidth(value) : fallback;
+};
 
 const compactInput = (input: Record<string, any>) => {
   return Object.fromEntries(
@@ -195,6 +210,10 @@ export default function App() {
   const [sourceAsset, setSourceAsset] = useState<SourceAsset | null>(null);
   const [frameGrabber, setFrameGrabber] = useState<{ url: string; time: number; duration: number } | null>(null);
   const [isCreateTaskPending, setIsCreateTaskPending] = useState(false);
+  const [leftPaneOpen, setLeftPaneOpen] = useState(() => localStorage.getItem('kie_left_pane_open') !== 'false');
+  const [rightPaneOpen, setRightPaneOpen] = useState(() => localStorage.getItem('kie_right_pane_open') !== 'false');
+  const [leftPaneWidth, setLeftPaneWidth] = useState(() => readStoredPaneWidth('kie_left_pane_width', PANE_WIDTHS.leftDefault));
+  const [rightPaneWidth, setRightPaneWidth] = useState(() => readStoredPaneWidth('kie_right_pane_width', PANE_WIDTHS.rightDefault));
   const lastPersistedLogsRef = useRef('');
   const activePollsRef = useRef(new Set<string>());
   const createTaskInFlightRef = useRef(false);
@@ -202,6 +221,50 @@ export default function App() {
   const frameVideoRef = useRef<HTMLVideoElement>(null);
   const currentProject = projects.find((project) => project.id === currentProjectId) || null;
   const projectApiUrl = (path: string) => new URL(path, window.location.origin).toString();
+
+  useEffect(() => {
+    localStorage.setItem('kie_left_pane_open', String(leftPaneOpen));
+  }, [leftPaneOpen]);
+
+  useEffect(() => {
+    localStorage.setItem('kie_right_pane_open', String(rightPaneOpen));
+  }, [rightPaneOpen]);
+
+  useEffect(() => {
+    localStorage.setItem('kie_left_pane_width', String(leftPaneWidth));
+  }, [leftPaneWidth]);
+
+  useEffect(() => {
+    localStorage.setItem('kie_right_pane_width', String(rightPaneWidth));
+  }, [rightPaneWidth]);
+
+  const startPaneResize = (side: PaneSide, event: React.MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    const startX = event.clientX;
+    const startWidth = side === 'left' ? leftPaneWidth : rightPaneWidth;
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const delta = moveEvent.clientX - startX;
+      const nextWidth = side === 'left' ? startWidth + delta : startWidth - delta;
+      if (side === 'left') {
+        setLeftPaneWidth(clampPaneWidth(nextWidth));
+      } else {
+        setRightPaneWidth(clampPaneWidth(nextWidth));
+      }
+    };
+
+    const stopResize = () => {
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', stopResize);
+    };
+
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', stopResize);
+  };
 
   useEffect(() => {
     localStorage.setItem('kie_selected_model', `${selectedModel.category}:${selectedModel.id}`);
@@ -1028,25 +1091,60 @@ export default function App() {
   return (
     <div className="flex h-screen bg-neutral-950 text-neutral-100 font-sans overflow-hidden">
       {/* Sidebar - Models */}
-      <div className="w-72 bg-neutral-900 border-r border-neutral-800 flex flex-col shrink-0">
-        <div className="p-4 border-b border-neutral-800 flex items-center gap-3">
-          <div className="w-8 h-8 rounded-lg bg-indigo-500 flex items-center justify-center">
-            <LayoutGrid className="w-5 h-5 text-white" />
+      {leftPaneOpen ? (
+        <div
+          className="bg-neutral-900 border-r border-neutral-800 flex flex-col shrink-0"
+          style={{ width: leftPaneWidth }}
+        >
+          <div className="p-4 border-b border-neutral-800 flex items-center gap-3">
+            <div className="w-8 h-8 rounded-lg bg-indigo-500 flex items-center justify-center">
+              <LayoutGrid className="w-5 h-5 text-white" />
+            </div>
+            <h1 className="min-w-0 flex-1 truncate font-semibold text-lg tracking-tight">Kai Media Studio</h1>
+            <button
+              type="button"
+              onClick={() => setLeftPaneOpen(false)}
+              className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-neutral-500 transition hover:bg-neutral-800 hover:text-neutral-100"
+              title="Collapse model pane"
+            >
+              <PanelLeftClose className="h-4 w-4" />
+            </button>
           </div>
-          <h1 className="font-semibold text-lg tracking-tight">Kai Media Studio</h1>
+          <div className="flex-1 overflow-y-auto p-4 pb-0 flex flex-col">
+            <ModelSidebar
+              selectedModel={selectedModel}
+              onSelectModel={setSelectedModel}
+              onOpenSettings={() => setShowSettings(true)}
+              credits={credits}
+              creditError={creditError}
+              isLoadingCredits={isLoadingCredits}
+              onRefreshCredits={fetchCredits}
+            />
+          </div>
         </div>
-        <div className="flex-1 overflow-y-auto p-4 pb-0 flex flex-col">
-          <ModelSidebar 
-            selectedModel={selectedModel} 
-            onSelectModel={setSelectedModel} 
-            onOpenSettings={() => setShowSettings(true)}
-            credits={credits}
-            creditError={creditError}
-            isLoadingCredits={isLoadingCredits}
-            onRefreshCredits={fetchCredits}
-          />
+      ) : (
+        <div className="flex w-11 shrink-0 flex-col items-center border-r border-neutral-800 bg-neutral-900 py-3">
+          <button
+            type="button"
+            onClick={() => setLeftPaneOpen(true)}
+            className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 transition hover:bg-neutral-800 hover:text-neutral-100"
+            title="Open model pane"
+          >
+            <PanelLeftOpen className="h-4 w-4" />
+          </button>
         </div>
-      </div>
+      )}
+
+      {leftPaneOpen && (
+        <button
+          type="button"
+          onMouseDown={(event) => startPaneResize('left', event)}
+          className="group grid h-full w-2 shrink-0 cursor-col-resize place-items-center border-r border-neutral-900 bg-neutral-950 hover:bg-neutral-800"
+          title="Resize model pane"
+        >
+          <GripVertical className="h-4 w-4 text-neutral-700 group-hover:text-neutral-400" />
+        </button>
+      )}
 
       {/* Main Workspace */}
       <div className="flex-1 flex flex-col min-w-0 bg-neutral-950 relative">
@@ -1060,80 +1158,123 @@ export default function App() {
         />
       </div>
 
+      {rightPaneOpen && (
+        <button
+          type="button"
+          onMouseDown={(event) => startPaneResize('right', event)}
+          className="group grid h-full w-2 shrink-0 cursor-col-resize place-items-center border-l border-neutral-900 bg-neutral-950 hover:bg-neutral-800"
+          title="Resize activity pane"
+        >
+          <GripVertical className="h-4 w-4 text-neutral-700 group-hover:text-neutral-400" />
+        </button>
+      )}
+
       {/* Right Sidebar - Activity Log */}
-      <div className="w-80 bg-neutral-900 border-l border-neutral-800 flex flex-col shrink-0">
-        <div className="p-4 border-b border-neutral-800 space-y-3">
-          <div className="flex items-center justify-between gap-2">
-            <h2 className="font-medium text-sm text-neutral-400 uppercase tracking-wider">Activity Log</h2>
-            <button
-              onClick={() => setProjectDialog({ mode: 'create', name: `Project ${projects.length + 1}` })}
-              className="h-8 w-8 rounded-md bg-indigo-500 text-white grid place-items-center hover:bg-indigo-400 transition-colors"
-              title="New project"
-            >
-              <Plus className="w-4 h-4" />
-            </button>
+      {rightPaneOpen ? (
+        <div
+          className="bg-neutral-900 border-l border-neutral-800 flex flex-col shrink-0"
+          style={{ width: rightPaneWidth }}
+        >
+          <div className="p-4 border-b border-neutral-800 space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => setRightPaneOpen(false)}
+                className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-neutral-500 transition hover:bg-neutral-800 hover:text-neutral-100"
+                title="Collapse activity pane"
+              >
+                <PanelRightClose className="h-4 w-4" />
+              </button>
+              <h2 className="min-w-0 flex-1 truncate font-medium text-sm text-neutral-400 uppercase tracking-wider">Activity Log</h2>
+              <button
+                onClick={() => setProjectDialog({ mode: 'create', name: `Project ${projects.length + 1}` })}
+                className="h-8 w-8 rounded-md bg-indigo-500 text-white grid place-items-center hover:bg-indigo-400 transition-colors"
+                title="New project"
+              >
+                <Plus className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="rounded-lg border border-neutral-800 bg-neutral-950/60 p-3 space-y-2">
+              <div className="flex items-center gap-2 text-xs text-neutral-500">
+                <FolderOpen className="w-3.5 h-3.5 text-indigo-300" />
+                <span>Project</span>
+              </div>
+              <select
+                value={currentProjectId || ''}
+                onChange={(event) => setCurrentProjectId(event.target.value || null)}
+                className="w-full bg-neutral-950 border border-neutral-800 rounded-md px-2 py-2 text-sm text-neutral-100 focus:outline-none focus:border-indigo-500"
+              >
+                <option value="">No project open</option>
+                {projects.map((project) => (
+                  <option key={project.id} value={project.id}>
+                    {project.name}
+                  </option>
+                ))}
+              </select>
+              <div className="grid grid-cols-3 gap-2">
+                <button
+                  onClick={() => currentProject && setProjectDialog({ mode: 'rename', name: currentProject.name })}
+                  disabled={!currentProject}
+                  className="h-8 rounded-md border border-neutral-800 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100 disabled:opacity-40 disabled:hover:bg-transparent"
+                  title="Rename project"
+                >
+                  <Edit3 className="w-3.5 h-3.5 mx-auto" />
+                </button>
+                <button
+                  onClick={handleClearProject}
+                  disabled={!currentProject || logs.length === 0}
+                  className="h-8 rounded-md border border-neutral-800 text-neutral-400 hover:bg-red-500/10 hover:text-red-300 disabled:opacity-40 disabled:hover:bg-transparent"
+                  title="Clear project log"
+                >
+                  <Trash2 className="w-3.5 h-3.5 mx-auto" />
+                </button>
+                <button
+                  onClick={handleCloseProject}
+                  disabled={!currentProject}
+                  className="h-8 rounded-md border border-neutral-800 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100 disabled:opacity-40 disabled:hover:bg-transparent"
+                  title="Close project"
+                >
+                  <X className="w-3.5 h-3.5 mx-auto" />
+                </button>
+              </div>
+            </div>
           </div>
-          <div className="rounded-lg border border-neutral-800 bg-neutral-950/60 p-3 space-y-2">
-            <div className="flex items-center gap-2 text-xs text-neutral-500">
-              <FolderOpen className="w-3.5 h-3.5 text-indigo-300" />
-              <span>Project</span>
-            </div>
-            <select
-              value={currentProjectId || ''}
-              onChange={(event) => setCurrentProjectId(event.target.value || null)}
-              className="w-full bg-neutral-950 border border-neutral-800 rounded-md px-2 py-2 text-sm text-neutral-100 focus:outline-none focus:border-indigo-500"
-            >
-              <option value="">No project open</option>
-              {projects.map((project) => (
-                <option key={project.id} value={project.id}>
-                  {project.name}
-                </option>
-              ))}
-            </select>
-            <div className="grid grid-cols-3 gap-2">
-              <button
-                onClick={() => currentProject && setProjectDialog({ mode: 'rename', name: currentProject.name })}
-                disabled={!currentProject}
-                className="h-8 rounded-md border border-neutral-800 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100 disabled:opacity-40 disabled:hover:bg-transparent"
-                title="Rename project"
-              >
-                <Edit3 className="w-3.5 h-3.5 mx-auto" />
-              </button>
-              <button
-                onClick={handleClearProject}
-                disabled={!currentProject || logs.length === 0}
-                className="h-8 rounded-md border border-neutral-800 text-neutral-400 hover:bg-red-500/10 hover:text-red-300 disabled:opacity-40 disabled:hover:bg-transparent"
-                title="Clear project log"
-              >
-                <Trash2 className="w-3.5 h-3.5 mx-auto" />
-              </button>
-              <button
-                onClick={handleCloseProject}
-                disabled={!currentProject}
-                className="h-8 rounded-md border border-neutral-800 text-neutral-400 hover:bg-neutral-800 hover:text-neutral-100 disabled:opacity-40 disabled:hover:bg-transparent"
-                title="Close project"
-              >
-                <X className="w-3.5 h-3.5 mx-auto" />
-              </button>
-            </div>
+          <div className="flex-1 overflow-y-auto">
+            {currentProject ? (
+              <ActivityLog
+                logs={logs}
+                autoplayVideos={autoplayVideos}
+                onUseAsSource={useAsSource}
+                onGrabVideoFrame={handleGrabVideoFrame}
+                onDeleteLog={handleDeleteLog}
+              />
+            ) : (
+              <div className="p-8 text-center text-sm text-neutral-500">
+                Open or create a project to view activity.
+              </div>
+            )}
           </div>
         </div>
-        <div className="flex-1 overflow-y-auto">
-          {currentProject ? (
-            <ActivityLog
-              logs={logs}
-              autoplayVideos={autoplayVideos}
-              onUseAsSource={useAsSource}
-              onGrabVideoFrame={handleGrabVideoFrame}
-              onDeleteLog={handleDeleteLog}
-            />
-          ) : (
-            <div className="p-8 text-center text-sm text-neutral-500">
-              Open or create a project to view activity.
-            </div>
-          )}
+      ) : (
+        <div className="flex w-11 shrink-0 flex-col items-center border-l border-neutral-800 bg-neutral-900 py-3">
+          <button
+            type="button"
+            onClick={() => setRightPaneOpen(true)}
+            className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 transition hover:bg-neutral-800 hover:text-neutral-100"
+            title="Open activity pane"
+          >
+            <PanelRightOpen className="h-4 w-4" />
+          </button>
+          <button
+            type="button"
+            onClick={() => setProjectDialog({ mode: 'create', name: `Project ${projects.length + 1}` })}
+            className="mt-2 grid h-8 w-8 place-items-center rounded-md bg-indigo-500 text-white transition-colors hover:bg-indigo-400"
+            title="New project"
+          >
+            <Plus className="h-4 w-4" />
+          </button>
         </div>
-      </div>
+      )}
 
       {projectDialog && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-6">
