@@ -14,6 +14,12 @@ const getExtensionFromContentType = (contentType: string | null, fallbackType?: 
   if (contentType?.includes('video/webm')) return 'webm';
   if (contentType?.includes('video/quicktime')) return 'mov';
   if (contentType?.includes('video/mp4')) return 'mp4';
+  if (contentType?.includes('audio/mpeg')) return 'mp3';
+  if (contentType?.includes('audio/wav') || contentType?.includes('audio/x-wav')) return 'wav';
+  if (contentType?.includes('audio/aac')) return 'aac';
+  if (contentType?.includes('audio/ogg')) return 'ogg';
+  if (contentType?.includes('audio/mp4')) return 'm4a';
+  if (fallbackType === 'audio') return 'mp3';
   return fallbackType === 'video' ? 'mp4' : 'png';
 };
 
@@ -21,10 +27,11 @@ const getExtensionFromUrl = (url: string, fallbackType?: string) => {
   try {
     const pathname = new URL(url, 'http://local').pathname;
     const ext = path.extname(pathname).replace('.', '').toLowerCase();
-    if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'mp4', 'webm', 'mov'].includes(ext)) {
+    if (['png', 'jpg', 'jpeg', 'webp', 'gif', 'mp4', 'webm', 'mov', 'mp3', 'wav', 'aac', 'ogg', 'm4a'].includes(ext)) {
       return ext === 'jpeg' ? 'jpg' : ext;
     }
   } catch {}
+  if (fallbackType === 'audio') return 'mp3';
   return fallbackType === 'video' ? 'mp4' : 'png';
 };
 

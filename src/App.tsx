@@ -11,7 +11,7 @@ import { SettingsModal } from './components/SettingsModal';
 import { SUPPORTED_MODELS, GenerationLog, AIModel, Project } from './types';
 import { Edit3, FolderOpen, LayoutGrid, Plus, Trash2, X } from 'lucide-react';
 
-const arrayUrlParams = new Set(['image_urls', 'input_urls', 'image_input', 'reference_image_urls', 'reference_video_urls', 'reference_audio_urls', 'video_urls']);
+const arrayUrlParams = new Set(['image_urls', 'input_urls', 'image_input', 'mask_url', 'reference_image_urls', 'reference_video_urls', 'reference_audio_urls', 'video_urls']);
 type SourceAsset = { id: string; type: 'image' | 'video'; url: string; label?: string };
 
 const compactInput = (input: Record<string, any>) => {
@@ -57,9 +57,41 @@ const normalizeResultUrls = (result: any): string[] => {
   return [];
 };
 
+const normalizeTextResult = (result: any): string => {
+  if (result === null || result === undefined || result === '') return '';
+
+  if (typeof result === 'string') {
+    try {
+      return normalizeTextResult(JSON.parse(result));
+    } catch {
+      return result;
+    }
+  }
+
+  if (Array.isArray(result)) {
+    return result.map((item) => normalizeTextResult(item)).filter(Boolean).join('\n');
+  }
+
+  if (typeof result === 'object') {
+    const directValue = result.character_id || result.characterId || result.audio_id || result.audioId || result.id || result.text || result.output;
+    if (directValue !== undefined && directValue !== null && typeof directValue !== 'object') {
+      return String(directValue);
+    }
+    return JSON.stringify(result, null, 2);
+  }
+
+  return String(result);
+};
+
 const assignModelImageInput = (inputPayload: Record<string, any>, model: AIModel, imageUrl: string) => {
   if (!model.imageInputKey) return false;
-  inputPayload[model.imageInputKey] = model.imageInputMode === 'single' ? imageUrl : [imageUrl];
+  if (model.imageInputMode === 'single') {
+    inputPayload[model.imageInputKey] = imageUrl;
+  } else {
+    const existing = inputPayload[model.imageInputKey];
+    const existingUrls = Array.isArray(existing) ? existing : existing ? [existing] : [];
+    inputPayload[model.imageInputKey] = [...existingUrls, imageUrl];
+  }
   return true;
 };
 
@@ -457,6 +489,7 @@ export default function App() {
       const isVeo = isVeoModel(modelId);
       let mediaUrl = '';
       let mediaUrls: string[] = [];
+      let textResult = '';
 
       for (let attempt = 0; attempt < 300; attempt += 1) {
         await new Promise(r => setTimeout(r, 3000));
@@ -477,14 +510,35 @@ export default function App() {
           const resultData = isVeo
             ? (pollData.data?.resultUrls || pollData.data?.response?.resultUrls)
             : (pollData.data?.resultJson || pollData.data?.resultUrls || pollData.data?.response);
-          mediaUrls = normalizeResultUrls(resultData);
-          mediaUrl = mediaUrls[0] || '';
+          if (type === 'text') {
+            textResult = normalizeTextResult(resultData || pollData.data?.response || pollData.data);
+          } else {
+            mediaUrls = normalizeResultUrls(resultData);
+            mediaUrl = mediaUrls[0] || '';
+          }
           break;
         }
 
         if (state === 'fail' || state === 'failed' || state === 2 || state === 3 || state === 'error') {
           throw new Error(pollData.data?.failMsg || 'Generation task failed');
         }
+      }
+
+      if (type === 'text') {
+        if (!textResult) {
+          throw new Error('No ID or text result returned after generation success');
+        }
+
+        setLogs((prev) =>
+          prev.map((l) => (l.id === logId ? {
+            ...l,
+            status: 'success',
+            completedAt: new Date().toISOString(),
+            durationMs: Date.now() - new Date(l.timestamp).getTime(),
+            textResult,
+          } : l))
+        );
+        return;
       }
 
       if (!mediaUrl) {
@@ -558,7 +612,9 @@ export default function App() {
       provider: selectedModel.provider,
       prompt,
       status: 'generating',
-      type: selectedModel.category.includes('video') ? 'video' : 'image',
+      type: selectedModel.category === 'text-to-text'
+        ? 'text'
+        : selectedModel.category.includes('video') ? 'video' : 'image',
     };
 
     setLogs((prev) => [logEntry, ...prev]);
@@ -768,6 +824,10 @@ export default function App() {
         delete inputPayload.seed;
       }
 
+      if (selectedModel.id === 'kling/v3-turbo-image-to-video' && !inputPayload.image_urls?.length) {
+        throw new Error('Kling 3.0 Turbo Image to Video requires one source image.');
+      }
+
       if (selectedModel.id === 'hailuo/02-text-to-video-pro') {
         inputPayload.prompt_optimizer = inputPayload.prompt_optimizer ?? true;
         delete inputPayload.aspect_ratio;
@@ -792,6 +852,37 @@ export default function App() {
         }
         delete inputPayload.video_start;
         delete inputPayload.video_end;
+      }
+
+      if (selectedModel.id === 'gemini-omni-character') {
+        if (typeof inputPayload.audio_ids === 'string') {
+          inputPayload.audio_ids = inputPayload.audio_ids.split(',').map((item: string) => item.trim()).filter(Boolean);
+        }
+        if (!inputPayload.image_urls?.length) {
+          throw new Error('Gemini Omni Character requires one character image.');
+        }
+        if (!inputPayload.descriptions) {
+          throw new Error('Gemini Omni Character requires a description.');
+        }
+        delete inputPayload.prompt;
+      }
+
+      if (selectedModel.id === 'gemini-omni-audio') {
+        if (!inputPayload.audio_id) {
+          throw new Error('Gemini Omni Audio requires an audio ID.');
+        }
+        if (!inputPayload.name) {
+          throw new Error('Gemini Omni Audio requires a name.');
+        }
+        delete inputPayload.prompt;
+      }
+
+      if (selectedModel.id === 'omnihuman-1-5' && !inputPayload.audio_url) {
+        throw new Error('OmniHuman 1.5 requires an audio file.');
+      }
+
+      if (selectedModel.id === 'volcengine-video-to-video-lip-sync' && !inputPayload.audio_url) {
+        throw new Error('Volcengine Video-to-Video Lip Sync requires an audio file.');
       }
 
       if (selectedModel.id === 'veo-3.1') {

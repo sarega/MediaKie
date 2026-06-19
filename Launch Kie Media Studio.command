@@ -22,7 +22,7 @@ done
 
 URL="http://localhost:$PORT"
 
-echo "Starting Kie Media Studio..."
+echo "Starting Media Studio..."
 echo "URL: $URL"
 echo
 echo "Keep this Terminal window open while using the app."

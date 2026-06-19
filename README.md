@@ -4,7 +4,7 @@ Kai Media Studio is a local web app for generating images and videos with Kie.ai
 
 ## Version
 
-Current version: `1.0.0`
+Current version: `1.1.0`
 
 ## What is included
 
@@ -14,6 +14,9 @@ Current version: `1.0.0`
 - Optional video autoplay setting
 - Credit counter refresh after reloads and completed generations
 - Project-based activity history
+- Use Case and Provider model browsing with search
+- Google Omni, Seedance, Kling, Veo, and Nano Banana model grouping labels
+- Simple video editor for assembling, trimming, splitting, previewing, and exporting generated clips
 
 ## How to use
 
@@ -54,6 +57,16 @@ npm run start
 ```
 
 ## Update log
+
+### 1.1.0 — 2026-06-19
+
+- Added a Provider browsing tab alongside the existing Use Case categories.
+- Added model search across model names, providers, modes, categories, and IDs.
+- Added grouped labels for multi-mode model families such as Google Omni, Seedance, Kling, Veo, and Nano Banana Pro.
+- Added Gemini Omni Audio voice selection while keeping name, voice description, and example dialogue inputs.
+- Added Kling 3.0 Turbo text-to-video and image-to-video modes.
+- Added a simple video editing mode with drag-and-drop clips from Activity Log, timeline ordering, trimming, splitting, preview, and WebM export.
+- Fixed provider metadata for Nanobanana 2 and normalized Bytedance provider naming.
 
 ### 1.0.0 — 2026-06-19
 

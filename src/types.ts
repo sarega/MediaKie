@@ -3,12 +3,16 @@ export type ModelCategory = 'text-to-image' | 'image-to-image' | 'image-edit' | 
 export interface ModelParamConfig {
   name: string;
   key: string;
-  type: 'select' | 'number' | 'text' | 'boolean' | 'slider' | 'file';
-  options?: { label: string; value: string | number }[]; // For select
+  type: 'select' | 'number' | 'text' | 'boolean' | 'slider' | 'file' | 'voice-select';
+  description?: string;
+  options?: { label: string; value: string | number; description?: string; group?: string }[]; // For select
   min?: number;
   max?: number;
   step?: number;
   accept?: string; // For file
+  multiple?: boolean;
+  maxFiles?: number;
+  maxItems?: number;
   defaultValue: any;
 }
 
@@ -17,6 +21,9 @@ export interface AIModel {
   name: string; // Display name
   provider: string; // e.g., 'Wan', 'Google', 'Kling'
   category: ModelCategory;
+  familyId?: string;
+  familyName?: string;
+  modeName?: string;
   description?: string;
   supportsImageUpload?: boolean;
   supportsVideoUpload?: boolean;
@@ -224,9 +231,9 @@ const bytedanceV1Params: ModelParamConfig[] = [
 ];
 
 const seedance15Params: ModelParamConfig[] = [
-  { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: aspectRatioOptions, defaultValue: '16:9' },
-  { name: 'Resolution', key: 'resolution', type: 'select', options: [{ label: '720p', value: '720p' }, { label: '1080p', value: '1080p' }], defaultValue: '720p' },
-  { name: 'Duration', key: 'duration', type: 'select', options: [{ label: '8s', value: '8' }], defaultValue: '8' },
+  { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: [{ label: '1:1', value: '1:1' }, { label: '21:9', value: '21:9' }, { label: '4:3', value: '4:3' }, { label: '3:4', value: '3:4' }, { label: '16:9', value: '16:9' }, { label: '9:16', value: '9:16' }], defaultValue: '16:9' },
+  { name: 'Resolution', key: 'resolution', type: 'select', options: [{ label: '480p', value: '480p' }, { label: '720p', value: '720p' }, { label: '1080p', value: '1080p' }], defaultValue: '720p' },
+  { name: 'Duration', key: 'duration', type: 'slider', min: 4, max: 12, step: 1, defaultValue: 8 },
   { name: 'Fixed Lens', key: 'fixed_lens', type: 'boolean', defaultValue: false },
   { name: 'Generate Audio', key: 'generate_audio', type: 'boolean', defaultValue: false },
   { name: 'NSFW Checker', key: 'nsfw_checker', type: 'boolean', defaultValue: false }
@@ -251,6 +258,18 @@ const kling30Params: ModelParamConfig[] = [
   { name: 'Duration', key: 'duration', type: 'select', options: [{ label: '3s', value: '3' }, { label: '5s', value: '5' }, { label: '10s', value: '10' }, { label: '15s', value: '15' }], defaultValue: '5' },
   { name: 'Mode', key: 'mode', type: 'select', options: [{ label: 'Standard', value: 'std' }, { label: 'Pro', value: 'pro' }, { label: '4K', value: '4K' }], defaultValue: 'pro' },
   { name: 'Sound', key: 'sound', type: 'boolean', defaultValue: true }
+];
+
+const kling30TurboTextParams: ModelParamConfig[] = [
+  { name: 'Duration', key: 'duration', type: 'slider', min: 3, max: 15, step: 1, defaultValue: 5, description: 'The duration of the generated video in seconds.' },
+  { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: [{ label: '1:1', value: '1:1' }, { label: '9:16', value: '9:16' }, { label: '16:9', value: '16:9' }], defaultValue: '16:9', description: 'The aspect ratio of the generated video frame.' },
+  { name: 'Resolution', key: 'resolution', type: 'select', options: [{ label: '720p', value: '720p' }, { label: '1080p', value: '1080p' }], defaultValue: '720p', description: 'Resolution of the generated video.' },
+];
+
+const kling30TurboImageParams: ModelParamConfig[] = [
+  { name: 'Image URLs', key: 'image_urls', type: 'file', accept: 'image/*', multiple: true, maxFiles: 1, defaultValue: [], description: 'URL of the image to be used for the video. JPEG/PNG, max 10MB.' },
+  { name: 'Duration', key: 'duration', type: 'slider', min: 3, max: 15, step: 1, defaultValue: 5, description: 'The duration of the generated video in seconds.' },
+  { name: 'Resolution', key: 'resolution', type: 'select', options: [{ label: '720p', value: '720p' }, { label: '1080p', value: '1080p' }], defaultValue: '720p', description: 'Resolution of the generated video.' },
 ];
 
 const hailuoTextParams: ModelParamConfig[] = [
@@ -306,11 +325,83 @@ const veo31TaskOnlyParams: ModelParamConfig[] = [
 ];
 
 const geminiOmniVideoParams: ModelParamConfig[] = [
-  { name: 'Audio IDs (comma separated)', key: 'audio_ids', type: 'text', defaultValue: '' },
-  { name: 'Character IDs (comma separated)', key: 'character_ids', type: 'text', defaultValue: '' },
-  { name: 'Video Start', key: 'video_start', type: 'number', min: 0, max: 9999, step: 1, defaultValue: 0 },
-  { name: 'Video End', key: 'video_end', type: 'number', min: 1, max: 9999, step: 1, defaultValue: 10 },
-  { name: 'Duration', key: 'duration', type: 'select', options: [{ label: '4s', value: '4' }, { label: '6s', value: '6' }, { label: '8s', value: '8' }], defaultValue: '4' }
+  { name: 'Reference Images', key: 'image_urls', type: 'file', accept: 'image/*', multiple: true, maxFiles: 7, defaultValue: [], description: 'Optional image references. KIE allows up to 7 slots total; one source video uses 2 slots and each Character ID uses 1 slot.' },
+  { name: 'Audio IDs', key: 'audio_ids', type: 'voice-select', options: [], multiple: true, maxItems: 3, defaultValue: [], description: 'Optional Gemini basic voice IDs. Select up to 3 voices.' },
+  { name: 'Character IDs', key: 'character_ids', type: 'text', defaultValue: '', description: 'Optional KIE Gemini Omni Character IDs. These are not image uploads; paste IDs created in the Gemini Omni Character workflow, separated by commas.' },
+  { name: 'Video Start', key: 'video_start', type: 'number', min: 0, max: 9999, step: 1, defaultValue: 0, description: 'Used only when a source video is loaded. This becomes video_list[0].start.' },
+  { name: 'Video End', key: 'video_end', type: 'number', min: 1, max: 9999, step: 1, defaultValue: 10, description: 'Used only when a source video is loaded. This becomes video_list[0].ends.' },
+  { name: 'Duration', key: 'duration', type: 'select', options: [{ label: '4s', value: '4' }, { label: '6s', value: '6' }, { label: '8s', value: '8' }, { label: '10s', value: '10' }], defaultValue: '4', description: 'Output duration for text/image generation. KIE ignores this when a source video determines the output length.' },
+  { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: [{ label: '16:9', value: '16:9' }, { label: '9:16', value: '9:16' }], defaultValue: '16:9' },
+  { name: 'Resolution', key: 'resolution', type: 'select', options: [{ label: '720p', value: '720p' }, { label: '1080p', value: '1080p' }, { label: '4k', value: '4k' }], defaultValue: '720p' },
+  { name: 'Seed', key: 'seed', type: 'number', min: 0, max: 2147483647, step: 1, defaultValue: 0 }
+];
+
+const geminiOmniCharacterParams: ModelParamConfig[] = [
+  { name: 'Character Name', key: 'character_name', type: 'text', defaultValue: '', description: 'Optional label for the generated reusable character.' },
+  { name: 'Character Image', key: 'image_urls', type: 'file', accept: 'image/*', maxFiles: 1, defaultValue: [], description: 'Required. Upload one character reference image. KIE returns a Character ID that can be used in Gemini Omni Video.' },
+  { name: 'Audio IDs', key: 'audio_ids', type: 'voice-select', options: [], multiple: true, maxItems: 1, defaultValue: [], description: 'Optional Gemini basic voice ID. KIE allows up to 1 here.' },
+  { name: 'Description', key: 'descriptions', type: 'text', defaultValue: '', description: 'Required character description used to register the reusable character.' },
+];
+
+const geminiOmniVoiceOptions = [
+  { label: 'Achernar', value: 'achernar', description: 'Female, soft, high pitch', group: 'Female' },
+  { label: 'Achird', value: 'achird', description: 'Male, friendly, mid pitch', group: 'Male' },
+  { label: 'Algenib', value: 'algenib', description: 'Male, gravelly, low pitch', group: 'Male' },
+  { label: 'Algieba', value: 'algieba', description: 'Male, easy-going, mid-low pitch', group: 'Male' },
+  { label: 'Alnilam', value: 'alnilam', description: 'Male, firm, low pitch', group: 'Male' },
+  { label: 'Aoede', value: 'aoede', description: 'Female, breezy, mid pitch', group: 'Female' },
+  { label: 'Autonoe', value: 'autonoe', description: 'Female, bright, mid pitch', group: 'Female' },
+  { label: 'Callirrhoe', value: 'callirrhoe', description: 'Female, easy-going, mid pitch', group: 'Female' },
+  { label: 'Charon', value: 'charon', description: 'Male, informative, low pitch', group: 'Male' },
+  { label: 'Despina', value: 'despina', description: 'Female, smooth, mid pitch', group: 'Female' },
+  { label: 'Enceladus', value: 'enceladus', description: 'Male, breathy, low pitch', group: 'Male' },
+  { label: 'Erinome', value: 'erinome', description: 'Female, clear, mid pitch', group: 'Female' },
+  { label: 'Fenrir', value: 'fenrir', description: 'Male, excitable, low pitch', group: 'Male' },
+  { label: 'Gacrux', value: 'gacrux', description: 'Female, mature, mid pitch', group: 'Female' },
+  { label: 'Iapetus', value: 'iapetus', description: 'Male, clear, low pitch', group: 'Male' },
+  { label: 'Kore', value: 'kore', description: 'Female, firm, mid pitch', group: 'Female' },
+  { label: 'Laomedeia', value: 'laomedeia', description: 'Female, upbeat, mid pitch', group: 'Female' },
+  { label: 'Leda', value: 'leda', description: 'Female, youthful, high pitch', group: 'Female' },
+  { label: 'Orus', value: 'orus', description: 'Male, firm, low pitch', group: 'Male' },
+  { label: 'Puck', value: 'puck', description: 'Male, upbeat, mid pitch', group: 'Male' },
+  { label: 'Pulcherrima', value: 'pulcherrima', description: 'Female, forward, mid pitch', group: 'Female' },
+  { label: 'Rasalgethi', value: 'rasalgethi', description: 'Male, informative, mid pitch', group: 'Male' },
+  { label: 'Sadachbia', value: 'sadachbia', description: 'Male, lively, low pitch', group: 'Male' },
+  { label: 'Sadaltager', value: 'sadaltager', description: 'Male, knowledgeable, mid pitch', group: 'Male' },
+  { label: 'Schedar', value: 'schedar', description: 'Male, even, mid pitch', group: 'Male' },
+  { label: 'Sulafat', value: 'sulafat', description: 'Female, warm, mid pitch', group: 'Female' },
+  { label: 'Umbriel', value: 'umbriel', description: 'Male, easy-going, low pitch', group: 'Male' },
+  { label: 'Vindemiatrix', value: 'vindemiatrix', description: 'Female, gentle, mid pitch', group: 'Female' },
+  { label: 'Zephyr', value: 'zephyr', description: 'Female, bright, high pitch', group: 'Female' },
+  { label: 'Zubenelgenubi', value: 'zubenelgenubi', description: 'Male, casual, low pitch', group: 'Male' },
+];
+
+geminiOmniVideoParams.find((param) => param.key === 'audio_ids')!.options = geminiOmniVoiceOptions;
+geminiOmniCharacterParams.find((param) => param.key === 'audio_ids')!.options = geminiOmniVoiceOptions;
+
+const geminiOmniAudioParams: ModelParamConfig[] = [
+  { name: 'Audio ID', key: 'audio_id', type: 'voice-select', options: geminiOmniVoiceOptions, defaultValue: '', description: 'Required Gemini basic voice ID.' },
+  { name: 'Name', key: 'name', type: 'text', defaultValue: '', description: 'Required voice name. Max 210 characters.' },
+  { name: 'Voice Description', key: 'voice_description', type: 'text', defaultValue: '', description: 'Describe the characteristics of sound.' },
+  { name: 'Example Dialogue', key: 'example_dialogue', type: 'text', defaultValue: '', description: 'Optional sample line, for example: Hello, my name is Koizumi. Max 120 characters.' },
+];
+
+const omniHuman15Params: ModelParamConfig[] = [
+  { name: 'Audio URL', key: 'audio_url', type: 'file', accept: 'audio/*', defaultValue: '' },
+  { name: 'Mask URL', key: 'mask_url', type: 'file', accept: 'image/*', defaultValue: '' },
+  { name: 'Output Resolution', key: 'output_resolution', type: 'select', options: [{ label: '720p', value: '720' }, { label: '1080p', value: '1080' }], defaultValue: '1080' },
+  { name: 'Fast Mode', key: 'pe_fast_mode', type: 'boolean', defaultValue: false },
+  { name: 'Seed', key: 'seed', type: 'number', min: -1, max: 2147483647, step: 1, defaultValue: -1 }
+];
+
+const volcengineLipSyncParams: ModelParamConfig[] = [
+  { name: 'Audio URL', key: 'audio_url', type: 'file', accept: 'audio/*', defaultValue: '' },
+  { name: 'Mode', key: 'mode', type: 'select', options: [{ label: 'Lite', value: 'lite' }, { label: 'Basic', value: 'basic' }], defaultValue: 'lite' },
+  { name: 'Separate Vocal', key: 'separate_vocal', type: 'boolean', defaultValue: false },
+  { name: 'Scene Detection', key: 'open_scenedet', type: 'boolean', defaultValue: false },
+  { name: 'Align Audio', key: 'align_audio', type: 'boolean', defaultValue: false },
+  { name: 'Reverse Loop', key: 'align_audio_reverse', type: 'boolean', defaultValue: false },
+  { name: 'Template Start Seconds', key: 'templ_start_seconds', type: 'number', min: 0, max: 9999, step: 0.1, defaultValue: 0 }
 ];
 
 const wanTextToVideoParams: ModelParamConfig[] = [
@@ -508,6 +599,7 @@ const seedanceV1ProCreditEstimator: AIModel['creditEstimator'] = {
 const seedance15CreditEstimator: AIModel['creditEstimator'] = {
   label: 'Estimated from public Kie pricing',
   creditsPerSecondByResolution: {
+    '480p': 1.75,
     '720p': 3.5,
     '1080p': 7.5,
   },
@@ -549,6 +641,19 @@ const kling30CreditEstimator: AIModel['creditEstimator'] = {
       '4K|false': 67,
       '4K|true': 67,
     },
+  },
+  round: 'ceil',
+};
+
+const kling30TurboCreditEstimator: AIModel['creditEstimator'] = {
+  label: 'Estimated from public Kie pricing',
+  creditsPerSecondByParam: {
+    key: 'resolution',
+    values: {
+      '720p': 18,
+      '1080p': 22.5,
+    },
+    fallback: 18,
   },
   round: 'ceil',
 };
@@ -599,6 +704,10 @@ const veo31ExtendCreditEstimator: AIModel['creditEstimator'] = {
   },
   round: 'ceil',
 };
+
+const geminiOmniCreditEstimator: AIModel['creditEstimator'] = fixedCredits(80, 'Estimated from Kie playground');
+
+const geminiOmniIdCreditEstimator: AIModel['creditEstimator'] = fixedCredits(5, 'Estimated from Kie playground');
 
 const grokTextToImageParams: ModelParamConfig[] = [
   { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: [{ label: '2:3', value: '2:3' }, { label: '3:2', value: '3:2' }, { label: '1:1', value: '1:1' }, { label: '9:16', value: '9:16' }, { label: '16:9', value: '16:9' }], defaultValue: '3:2' }
@@ -692,8 +801,8 @@ export const SUPPORTED_MODELS: AIModel[] = [
   { id: 'qwen/text-to-image', name: 'Qwen Image', provider: 'Alibaba', category: 'text-to-image', params: qwenTextToImageParams },
   { id: 'grok-imagine/text-to-image', name: 'Grok Images', provider: 'xAI', category: 'text-to-image', params: grokTextToImageParams },
   { id: 'google/nano-banana', name: 'Nano Banana', provider: 'Google', category: 'text-to-image', params: nanoBananaClassicParams, creditEstimator: nanoBananaClassicCreditEstimator },
-  { id: 'nano-banana-2', name: 'Nanobanana 2', provider: 'Unknown', category: 'text-to-image', params: nanoBananaParams, creditEstimator: nanoBanana2CreditEstimator },
-  { id: 'nano-banana-pro', name: 'Nano Banana Pro', provider: 'Google', category: 'text-to-image', params: nanoBananaParams, creditEstimator: nanoBananaProCreditEstimator },
+  { id: 'nano-banana-2', name: 'Nanobanana 2', provider: 'Google', category: 'text-to-image', params: nanoBananaParams, creditEstimator: nanoBanana2CreditEstimator },
+  { id: 'nano-banana-pro', name: 'Nano Banana Pro', provider: 'Google', category: 'text-to-image', familyId: 'google-nano-banana-pro', familyName: 'Nano Banana Pro', modeName: 'Text to Image', params: nanoBananaParams, creditEstimator: nanoBananaProCreditEstimator },
   { id: 'z-image', name: 'Z-Image', provider: 'Z-Image', category: 'text-to-image', params: zImageParams, creditEstimator: zImageCreditEstimator },
   { id: 'flux-2/pro-text-to-image', name: 'Flux 2 Pro', provider: 'Flux', category: 'text-to-image', params: fluxImageToImageParams, creditEstimator: flux2CreditEstimator },
   { id: 'flux-2/flex-text-to-image', name: 'Flux 2 Flex', provider: 'Flux', category: 'text-to-image', params: fluxImageToImageParams, creditEstimator: flux2CreditEstimator },
@@ -706,7 +815,7 @@ export const SUPPORTED_MODELS: AIModel[] = [
   // Image Models (Image to Image)
   { id: 'seedream/5-lite-image-to-image', name: 'Seedream 5.0 Lite I2I', provider: 'Bytedance', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: seedream45EditParams, creditEstimator: seedream5LiteCreditEstimator },
   { id: 'google/nano-banana-edit', name: 'Nano Banana Edit', provider: 'Google', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: nanoBananaClassicParams, creditEstimator: nanoBananaClassicCreditEstimator },
-  { id: 'nano-banana-pro', name: 'Nano Banana Pro I2I', provider: 'Google', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'image_input', imageInputMode: 'array', params: nanoBananaParams, creditEstimator: nanoBananaProCreditEstimator },
+  { id: 'nano-banana-pro', name: 'Nano Banana Pro I2I', provider: 'Google', category: 'image-to-image', familyId: 'google-nano-banana-pro', familyName: 'Nano Banana Pro', modeName: 'Image to Image', supportsImageUpload: true, imageInputKey: 'image_input', imageInputMode: 'array', params: nanoBananaParams, creditEstimator: nanoBananaProCreditEstimator },
   { id: 'flux-2/pro-image-to-image', name: 'Flux 2 Pro I2I', provider: 'Flux', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'input_urls', imageInputMode: 'array', params: fluxImageToImageParams, creditEstimator: flux2CreditEstimator },
   { id: 'flux-2/flex-image-to-image', name: 'Flux 2 Flex I2I', provider: 'Flux', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'input_urls', imageInputMode: 'array', params: fluxImageToImageParams, creditEstimator: flux2CreditEstimator },
   { id: 'grok-imagine/image-to-image', name: 'Grok Imagine I2I', provider: 'xAI', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: [] },
@@ -732,15 +841,16 @@ export const SUPPORTED_MODELS: AIModel[] = [
   { id: 'wan/2-5-text-to-video', name: 'Wan 2.5', provider: 'Wan', category: 'text-to-video', params: wanTextToVideoParams, creditEstimator: wan25VideoCreditEstimator },
   { id: 'wan/2-6-text-to-video', name: 'Wan 2.6', provider: 'Wan', category: 'text-to-video', params: wanTextToVideoParams },
   { id: 'wan/2-7-text-to-video', name: 'Wan 2.7', provider: 'Wan', category: 'text-to-video', params: wanTextToVideoParams, creditEstimator: wan27VideoCreditEstimator },
-  { id: 'veo-3.1', name: 'Veo 3.1', provider: 'Google', category: 'text-to-video', params: veo31Params, creditEstimator: veo31CreditEstimator },
-  { id: 'veo/extend', name: 'Veo 3.1 Extend', provider: 'Google', category: 'text-to-video', params: veo31ExtendParams, creditEstimator: veo31ExtendCreditEstimator },
-  { id: 'veo/get-4k-video', name: 'Veo 3.1 Get 4K Video', provider: 'Google', category: 'video-to-video', allowsPromptlessGeneration: true, params: veo31TaskOnlyParams, creditEstimator: fixedCredits(120) },
-  { id: 'veo/get-1080p-video', name: 'Veo 3.1 Get 1080p Video', provider: 'Google', category: 'video-to-video', allowsPromptlessGeneration: true, params: veo31TaskOnlyParams, creditEstimator: fixedCredits(5) },
-  { id: 'bytedance/v1-lite-text-to-video', name: 'Seedance V1 Lite', provider: 'Bytedance', category: 'text-to-video', params: bytedanceV1Params, creditEstimator: seedanceV1LiteCreditEstimator },
-  { id: 'bytedance/v1-pro-text-to-video', name: 'Seedance V1 Pro', provider: 'Bytedance', category: 'text-to-video', params: bytedanceV1Params, creditEstimator: seedanceV1ProCreditEstimator },
-  { id: 'bytedance/seedance-1.5-pro', name: 'Seedance 1.5 Pro', provider: 'Bytedance', category: 'text-to-video', params: seedance15Params, creditEstimator: seedance15CreditEstimator },
-  { id: 'bytedance/seedance-2', name: 'Seedance 2.0', provider: 'Bytedance', category: 'text-to-video', params: seedance2Params, creditEstimator: seedance2CreditEstimator },
-  { id: 'kling-3.0/video', name: 'Kling 3.0', provider: 'Kuaishou', category: 'text-to-video', params: kling30Params, creditEstimator: kling30CreditEstimator },
+  { id: 'veo-3.1', name: 'Veo 3.1', provider: 'Google', category: 'text-to-video', familyId: 'google-veo-3-1', familyName: 'Veo 3.1', modeName: 'Text to Video', params: veo31Params, creditEstimator: veo31CreditEstimator },
+  { id: 'veo/extend', name: 'Veo 3.1 Extend', provider: 'Google', category: 'text-to-video', familyId: 'google-veo-3-1', familyName: 'Veo 3.1', modeName: 'Extend', params: veo31ExtendParams, creditEstimator: veo31ExtendCreditEstimator },
+  { id: 'veo/get-4k-video', name: 'Veo 3.1 Get 4K Video', provider: 'Google', category: 'video-to-video', familyId: 'google-veo-3-1', familyName: 'Veo 3.1', modeName: 'Get 4K', allowsPromptlessGeneration: true, params: veo31TaskOnlyParams, creditEstimator: fixedCredits(120) },
+  { id: 'veo/get-1080p-video', name: 'Veo 3.1 Get 1080p Video', provider: 'Google', category: 'video-to-video', familyId: 'google-veo-3-1', familyName: 'Veo 3.1', modeName: 'Get 1080p', allowsPromptlessGeneration: true, params: veo31TaskOnlyParams, creditEstimator: fixedCredits(5) },
+  { id: 'bytedance/v1-lite-text-to-video', name: 'Seedance V1 Lite', provider: 'Bytedance', category: 'text-to-video', familyId: 'bytedance-seedance-v1-lite', familyName: 'Seedance V1 Lite', modeName: 'Text to Video', params: bytedanceV1Params, creditEstimator: seedanceV1LiteCreditEstimator },
+  { id: 'bytedance/v1-pro-text-to-video', name: 'Seedance V1 Pro', provider: 'Bytedance', category: 'text-to-video', familyId: 'bytedance-seedance-v1-pro', familyName: 'Seedance V1 Pro', modeName: 'Text to Video', params: bytedanceV1Params, creditEstimator: seedanceV1ProCreditEstimator },
+  { id: 'bytedance/seedance-1.5-pro', name: 'Seedance 1.5 Pro', provider: 'Bytedance', category: 'text-to-video', familyId: 'bytedance-seedance-1-5-pro', familyName: 'Seedance 1.5 Pro', modeName: 'Text to Video', params: seedance15Params, creditEstimator: seedance15CreditEstimator },
+  { id: 'bytedance/seedance-2', name: 'Seedance 2.0', provider: 'Bytedance', category: 'text-to-video', familyId: 'bytedance-seedance-2', familyName: 'Seedance 2.0', modeName: 'Text to Video', params: seedance2Params, creditEstimator: seedance2CreditEstimator },
+  { id: 'kling/v3-turbo-text-to-video', name: 'Kling 3.0 Turbo', provider: 'Kuaishou', category: 'text-to-video', familyId: 'kling-3-turbo', familyName: 'Kling 3.0 Turbo', modeName: 'Text to Video', params: kling30TurboTextParams, creditEstimator: kling30TurboCreditEstimator },
+  { id: 'kling-3.0/video', name: 'Kling 3.0', provider: 'Kuaishou', category: 'text-to-video', familyId: 'kling-3', familyName: 'Kling 3.0', modeName: 'Text to Video', params: kling30Params, creditEstimator: kling30CreditEstimator },
   { id: 'kling/2-6-text-to-video', name: 'Kling 2.6', provider: 'Kuaishou', category: 'text-to-video', params: kling26Params, creditEstimator: kling26CreditEstimator },
   { id: 'kling/2-5-turbo-text-to-video-pro', name: 'Kling 2.5 Turbo Pro', provider: 'Kuaishou', category: 'text-to-video', params: kling25Params },
   { id: 'kling/2-1-master-text-to-video', name: 'Kling 2.1 Master', provider: 'Kuaishou', category: 'text-to-video', params: kling21Params },
@@ -749,7 +859,9 @@ export const SUPPORTED_MODELS: AIModel[] = [
   { id: 'hailuo/02-text-to-video-pro', name: 'Hailuo Pro', provider: 'Minimax', category: 'text-to-video', params: hailuoTextParams },
   { id: 'hailuo/02-text-to-video-standard', name: 'Hailuo Standard', provider: 'Minimax', category: 'text-to-video', params: hailuoTextParams },
   { id: 'happyhorse/text-to-video', name: 'HappyHorse', provider: 'HappyHorse', category: 'text-to-video', params: happyHorseVideoParams },
-  { id: 'gemini-omni-video', name: 'Gemini Omni Video', provider: 'Google', category: 'text-to-video', supportsImageUpload: true, supportsVideoUpload: true, params: geminiOmniVideoParams },
+  { id: 'gemini-omni-video', name: 'Gemini Omni Video', provider: 'Google', category: 'text-to-video', familyId: 'google-gemini-omni', familyName: 'Google Omni', modeName: 'Text to Video', supportsImageUpload: true, supportsVideoUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: geminiOmniVideoParams, creditEstimator: geminiOmniCreditEstimator },
+  { id: 'gemini-omni-character', name: 'Gemini Omni Character', provider: 'Google', category: 'text-to-text', familyId: 'google-gemini-omni', familyName: 'Google Omni', modeName: 'Character ID', allowsPromptlessGeneration: true, params: geminiOmniCharacterParams, creditEstimator: geminiOmniIdCreditEstimator },
+  { id: 'gemini-omni-audio', name: 'Gemini Omni Audio', provider: 'Google', category: 'text-to-text', familyId: 'google-gemini-omni', familyName: 'Google Omni', modeName: 'Audio ID', allowsPromptlessGeneration: true, params: geminiOmniAudioParams, creditEstimator: geminiOmniIdCreditEstimator },
 
   // Video Models (Image to Video)
   { id: 'wan/2-5-image-to-video', name: 'Wan 2.5 I2V', provider: 'Wan', category: 'image-to-video', supportsImageUpload: true, params: wanImageToVideoParams, creditEstimator: wan25VideoCreditEstimator },
@@ -775,12 +887,13 @@ export const SUPPORTED_MODELS: AIModel[] = [
     },
   },
   { id: 'grok-imagine/image-to-video', name: 'Grok Imagine I2V', provider: 'xAI', category: 'image-to-video', supportsImageUpload: true, params: grokImageToVideoParams, creditEstimator: grokVideoCreditEstimator },
-  { id: 'bytedance/v1-lite-image-to-video', name: 'Seedance V1 Lite I2V', provider: 'Bytedance', category: 'image-to-video', supportsImageUpload: true, params: bytedanceV1Params, creditEstimator: seedanceV1LiteCreditEstimator },
-  { id: 'bytedance/v1-pro-image-to-video', name: 'Seedance V1 Pro I2V', provider: 'Bytedance', category: 'image-to-video', supportsImageUpload: true, params: bytedanceV1Params, creditEstimator: seedanceV1ProCreditEstimator },
-  { id: 'bytedance/seedance-1.5-pro', name: 'Seedance 1.5 Pro I2V', provider: 'Bytedance', category: 'image-to-video', supportsImageUpload: true, params: seedance15Params, creditEstimator: seedance15CreditEstimator },
-  { id: 'bytedance/seedance-2', name: 'Seedance 2.0 I2V', provider: 'Bytedance', category: 'image-to-video', supportsImageUpload: true, params: seedance2Params, creditEstimator: seedance2CreditEstimator },
-  { id: 'veo-3.1', name: 'Veo 3.1 I2V', provider: 'Google', category: 'image-to-video', supportsImageUpload: true, params: veo31Params, creditEstimator: veo31CreditEstimator },
-  { id: 'kling-3.0/video', name: 'Kling 3.0 I2V', provider: 'Kuaishou', category: 'image-to-video', supportsImageUpload: true, params: kling30Params, creditEstimator: kling30CreditEstimator },
+  { id: 'bytedance/v1-lite-image-to-video', name: 'Seedance V1 Lite I2V', provider: 'Bytedance', category: 'image-to-video', familyId: 'bytedance-seedance-v1-lite', familyName: 'Seedance V1 Lite', modeName: 'Image to Video', supportsImageUpload: true, params: bytedanceV1Params, creditEstimator: seedanceV1LiteCreditEstimator },
+  { id: 'bytedance/v1-pro-image-to-video', name: 'Seedance V1 Pro I2V', provider: 'Bytedance', category: 'image-to-video', familyId: 'bytedance-seedance-v1-pro', familyName: 'Seedance V1 Pro', modeName: 'Image to Video', supportsImageUpload: true, params: bytedanceV1Params, creditEstimator: seedanceV1ProCreditEstimator },
+  { id: 'bytedance/seedance-1.5-pro', name: 'Seedance 1.5 Pro I2V', provider: 'Bytedance', category: 'image-to-video', familyId: 'bytedance-seedance-1-5-pro', familyName: 'Seedance 1.5 Pro', modeName: 'Image to Video', supportsImageUpload: true, params: seedance15Params, creditEstimator: seedance15CreditEstimator },
+  { id: 'bytedance/seedance-2', name: 'Seedance 2.0 I2V', provider: 'Bytedance', category: 'image-to-video', familyId: 'bytedance-seedance-2', familyName: 'Seedance 2.0', modeName: 'Image to Video', supportsImageUpload: true, params: seedance2Params, creditEstimator: seedance2CreditEstimator },
+  { id: 'veo-3.1', name: 'Veo 3.1 I2V', provider: 'Google', category: 'image-to-video', familyId: 'google-veo-3-1', familyName: 'Veo 3.1', modeName: 'Image to Video', supportsImageUpload: true, params: veo31Params, creditEstimator: veo31CreditEstimator },
+  { id: 'kling/v3-turbo-image-to-video', name: 'Kling 3.0 Turbo I2V', provider: 'Kuaishou', category: 'image-to-video', familyId: 'kling-3-turbo', familyName: 'Kling 3.0 Turbo', modeName: 'Image to Video', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: kling30TurboImageParams, creditEstimator: kling30TurboCreditEstimator },
+  { id: 'kling-3.0/video', name: 'Kling 3.0 I2V', provider: 'Kuaishou', category: 'image-to-video', familyId: 'kling-3', familyName: 'Kling 3.0', modeName: 'Image to Video', supportsImageUpload: true, params: kling30Params, creditEstimator: kling30CreditEstimator },
   { id: 'kling/2-6-image-to-video', name: 'Kling 2.6 I2V', provider: 'Kuaishou', category: 'image-to-video', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: kling26Params, creditEstimator: kling26CreditEstimator },
   { id: 'kling/2-5-turbo-image-to-video-pro', name: 'Kling 2.5 Turbo Pro I2V', provider: 'Kuaishou', category: 'image-to-video', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: kling25Params },
   { id: 'kling/2-1-master-image-to-video', name: 'Kling 2.1 Master I2V', provider: 'Kuaishou', category: 'image-to-video', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: kling21Params },
@@ -790,7 +903,8 @@ export const SUPPORTED_MODELS: AIModel[] = [
   { id: 'hailuo/2-3-standard-image-to-video', name: 'Hailuo 2.3 Standard I2V', provider: 'Minimax', category: 'image-to-video', supportsImageUpload: true, imageInputKey: 'image_url', imageInputMode: 'single', params: hailuo23Params },
   { id: 'happyhorse/image-to-video', name: 'HappyHorse I2V', provider: 'HappyHorse', category: 'image-to-video', supportsImageUpload: true, params: happyHorseImageToVideoParams },
   { id: 'happyhorse/reference-to-video', name: 'HappyHorse Reference Video', provider: 'HappyHorse', category: 'image-to-video', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: happyHorseImageToVideoParams },
-  { id: 'gemini-omni-video', name: 'Gemini Omni I2V', provider: 'Google', category: 'image-to-video', supportsImageUpload: true, supportsVideoUpload: true, params: geminiOmniVideoParams },
+  { id: 'gemini-omni-video', name: 'Gemini Omni I2V', provider: 'Google', category: 'image-to-video', familyId: 'google-gemini-omni', familyName: 'Google Omni', modeName: 'Image to Video', supportsImageUpload: true, supportsVideoUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: geminiOmniVideoParams, creditEstimator: geminiOmniCreditEstimator },
+  { id: 'omnihuman-1-5', name: 'OmniHuman 1.5', provider: 'Bytedance', category: 'image-to-video', supportsImageUpload: true, requiresImageInput: true, imageInputKey: 'image_url', imageInputMode: 'single', params: omniHuman15Params },
 
   // Video Models (Video to Video)
   { id: 'wan/2-6-video-to-video', name: 'Wan 2.6 V2V', provider: 'Wan', category: 'video-to-video', supportsVideoUpload: true, params: wanVideoToVideoParams },
@@ -800,8 +914,9 @@ export const SUPPORTED_MODELS: AIModel[] = [
   { id: 'grok-imagine/video-extend', name: 'Grok Video Extend', provider: 'xAI', category: 'video-to-video', supportsVideoUpload: true, videoInputKey: 'video_url', videoInputMode: 'single', params: grokImageToVideoParams, creditEstimator: grokVideoCreditEstimator },
   { id: 'topaz/video-upscale', name: 'Topaz Video Upscale', provider: 'Topaz', category: 'video-to-video', supportsVideoUpload: true, videoInputKey: 'video_url', videoInputMode: 'single', params: topazVideoUpscaleParams },
   { id: 'happyhorse/video-edit', name: 'HappyHorse Video Edit', provider: 'HappyHorse', category: 'video-to-video', supportsVideoUpload: true, videoInputKey: 'video_url', videoInputMode: 'single', params: happyHorseVideoParams },
-  { id: 'kling-3.0/video', name: 'Kling 3.0 V2V', provider: 'Kuaishou', category: 'video-to-video', supportsVideoUpload: true, params: kling30Params, creditEstimator: kling30CreditEstimator },
-  { id: 'gemini-omni-video', name: 'Gemini Omni V2V', provider: 'Google', category: 'video-to-video', supportsImageUpload: true, supportsVideoUpload: true, params: geminiOmniVideoParams },
+  { id: 'kling-3.0/video', name: 'Kling 3.0 V2V', provider: 'Kuaishou', category: 'video-to-video', familyId: 'kling-3', familyName: 'Kling 3.0', modeName: 'Video to Video', supportsVideoUpload: true, params: kling30Params, creditEstimator: kling30CreditEstimator },
+  { id: 'gemini-omni-video', name: 'Gemini Omni V2V', provider: 'Google', category: 'video-to-video', familyId: 'google-gemini-omni', familyName: 'Google Omni', modeName: 'Video to Video', supportsImageUpload: true, supportsVideoUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: geminiOmniVideoParams, creditEstimator: geminiOmniCreditEstimator },
+  { id: 'volcengine-video-to-video-lip-sync', name: 'Volcengine Video-to-Video Lip Sync', provider: 'Bytedance', category: 'video-to-video', supportsVideoUpload: true, requiresVideoInput: true, videoInputKey: 'video_url', videoInputMode: 'single', params: volcengineLipSyncParams },
 ];
 
 export interface GenerationLog {
@@ -817,6 +932,7 @@ export interface GenerationLog {
   durationMs?: number;
   mediaUrl?: string; // Result URL (first image/video)
   mediaUrls?: string[]; // Array of result URLs (some models return multiple images)
+  textResult?: string;
   error?: string;
   type: 'image' | 'video' | 'text';
 }

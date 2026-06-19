@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { GenerationLog } from '../types';
 import { formatDistanceToNow } from 'date-fns';
-import { AlertCircle, Clock, CheckCircle2, ExternalLink, ImagePlus, Trash2, ScanLine } from 'lucide-react';
+import { AlertCircle, Clock, CheckCircle2, Copy, ExternalLink, ImagePlus, Trash2, ScanLine } from 'lucide-react';
 
 interface Props {
   logs: GenerationLog[];
@@ -95,7 +95,7 @@ export function ActivityLog({ logs, autoplayVideos, onUseAsSource, onGrabVideoFr
                     onDragStart={(event) => {
                       if (!isSourceMedia) return;
                       event.dataTransfer.effectAllowed = 'copy';
-                      event.dataTransfer.setData('application/x-kie-media', JSON.stringify({ type: log.type, url }));
+                      event.dataTransfer.setData('application/x-kie-media', JSON.stringify({ type: log.type, url, label: log.modelName }));
                     }}
                     className="relative rounded-md overflow-hidden bg-neutral-900 border border-neutral-800 flex-1 min-w-[45%] group/media"
                   >
@@ -140,6 +140,24 @@ export function ActivityLog({ logs, autoplayVideos, onUseAsSource, onGrabVideoFr
                   </div>
                 ))}
               </div>
+            </div>
+          )}
+
+          {log.status === 'success' && log.textResult && (
+            <div className="mt-2 rounded-md border border-neutral-800 bg-neutral-950 p-2">
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <span className="text-[11px] uppercase tracking-wider text-neutral-500">Generated ID</span>
+                <button
+                  onClick={() => navigator.clipboard?.writeText(log.textResult || '')}
+                  className="grid h-7 w-7 place-items-center rounded-md text-neutral-500 hover:bg-neutral-800 hover:text-neutral-100"
+                  title="Copy result"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <pre className="max-h-24 overflow-auto whitespace-pre-wrap break-words font-mono text-xs text-neutral-300">
+                {log.textResult}
+              </pre>
             </div>
           )}
         </div>
