@@ -452,6 +452,9 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
   const showFileOutput = !isGenerating && latestLog?.status === 'success' && latestLog.mediaUrl;
   const showTextOutput = !isGenerating && latestLog?.status === 'success' && latestLog.textResult;
   const estimatedCredits = estimateModelCredits(selectedModel, paramValues, fileData?.type);
+  const estimatedUsd = estimatedCredits
+    ? (estimatedCredits * 0.005).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })
+    : null;
   const canSubmit = Boolean(prompt.trim() || fileData || selectedModel.allowsPromptlessGeneration);
   
   const renderOutput = () => {
@@ -1117,7 +1120,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
               ) : (
                 <>
                   <Sparkles className="w-4 h-4" />
-                  {estimatedCredits ? `${estimatedCredits} ` : ''}
+                  {estimatedCredits ? `${estimatedCredits} cr ` : ''}
                   Generate
                 </>
               )}
@@ -1128,6 +1131,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
               <Wallet className="w-3.5 h-3.5 text-emerald-400" />
               <span>
                 Estimated generation cost: <span className="font-semibold text-neutral-200">{estimatedCredits} credits</span>
+                {estimatedUsd && <span> (~${estimatedUsd})</span>}
               </span>
               {selectedModel.creditEstimator?.label && (
                 <span className="text-neutral-600">({selectedModel.creditEstimator.label})</span>

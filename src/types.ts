@@ -253,6 +253,19 @@ const seedance2Params: ModelParamConfig[] = [
   { name: 'NSFW Checker', key: 'nsfw_checker', type: 'boolean', defaultValue: false }
 ];
 
+const seedance2MiniParams: ModelParamConfig[] = [
+  { name: 'Last Frame URL', key: 'last_frame_url', type: 'file', accept: 'image/*', defaultValue: '' },
+  { name: 'Reference Images', key: 'reference_image_urls', type: 'file', accept: 'image/*', multiple: true, maxFiles: 9, defaultValue: [] },
+  { name: 'Reference Videos', key: 'reference_video_urls', type: 'file', accept: 'video/*', multiple: true, maxFiles: 3, defaultValue: [] },
+  { name: 'Reference Audio', key: 'reference_audio_urls', type: 'file', accept: 'audio/*', multiple: true, maxFiles: 3, defaultValue: [] },
+  { name: 'Generate Audio', key: 'generate_audio', type: 'boolean', defaultValue: true },
+  { name: 'Resolution', key: 'resolution', type: 'select', options: [{ label: '480p', value: '480p' }, { label: '720p', value: '720p' }], defaultValue: '720p' },
+  { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: [{ label: '16:9', value: '16:9' }, { label: '4:3', value: '4:3' }, { label: '1:1', value: '1:1' }, { label: '3:4', value: '3:4' }, { label: '9:16', value: '9:16' }, { label: '21:9', value: '21:9' }, { label: 'Adaptive', value: 'adaptive' }], defaultValue: '16:9' },
+  { name: 'Duration', key: 'duration', type: 'slider', min: 4, max: 15, step: 1, defaultValue: 15 },
+  { name: 'Web Search', key: 'web_search', type: 'boolean', defaultValue: false },
+  { name: 'NSFW Checker', key: 'nsfw_checker', type: 'boolean', defaultValue: true }
+];
+
 const kling30Params: ModelParamConfig[] = [
   { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: aspectRatioOptions, defaultValue: '16:9' },
   { name: 'Duration', key: 'duration', type: 'select', options: [{ label: '3s', value: '3' }, { label: '5s', value: '5' }, { label: '10s', value: '10' }, { label: '15s', value: '15' }], defaultValue: '5' },
@@ -629,6 +642,20 @@ const seedance2CreditEstimator: AIModel['creditEstimator'] = {
   round: 'ceil',
 };
 
+const seedance2MiniCreditEstimator: AIModel['creditEstimator'] = {
+  label: 'Estimated from public Kie pricing',
+  creditsPerSecondByResolution: {
+    '480p': 9.5,
+    '720p': 20.5,
+  },
+  creditsPerSecondByResolutionWithVideoInput: {
+    '480p': 6,
+    '720p': 12.5,
+  },
+  sourceVideoParamKeys: ['reference_video_urls'],
+  round: 'ceil',
+};
+
 const kling30CreditEstimator: AIModel['creditEstimator'] = {
   label: 'Estimated from public Kie pricing',
   creditsPerSecondByParamCombo: {
@@ -849,6 +876,7 @@ export const SUPPORTED_MODELS: AIModel[] = [
   { id: 'bytedance/v1-pro-text-to-video', name: 'Seedance V1 Pro', provider: 'Bytedance', category: 'text-to-video', familyId: 'bytedance-seedance-v1-pro', familyName: 'Seedance V1 Pro', modeName: 'Text to Video', params: bytedanceV1Params, creditEstimator: seedanceV1ProCreditEstimator },
   { id: 'bytedance/seedance-1.5-pro', name: 'Seedance 1.5 Pro', provider: 'Bytedance', category: 'text-to-video', familyId: 'bytedance-seedance-1-5-pro', familyName: 'Seedance 1.5 Pro', modeName: 'Text to Video', params: seedance15Params, creditEstimator: seedance15CreditEstimator },
   { id: 'bytedance/seedance-2', name: 'Seedance 2.0', provider: 'Bytedance', category: 'text-to-video', familyId: 'bytedance-seedance-2', familyName: 'Seedance 2.0', modeName: 'Text to Video', params: seedance2Params, creditEstimator: seedance2CreditEstimator },
+  { id: 'bytedance/seedance-2-mini', name: 'Seedance 2.0 Mini', provider: 'Bytedance', category: 'text-to-video', familyId: 'bytedance-seedance-2-mini', familyName: 'Seedance 2.0 Mini', modeName: 'Text to Video', supportsVideoUpload: true, videoInputKey: 'reference_video_urls', videoInputMode: 'array', params: seedance2MiniParams, creditEstimator: seedance2MiniCreditEstimator },
   { id: 'kling/v3-turbo-text-to-video', name: 'Kling 3.0 Turbo', provider: 'Kuaishou', category: 'text-to-video', familyId: 'kling-3-turbo', familyName: 'Kling 3.0 Turbo', modeName: 'Text to Video', params: kling30TurboTextParams, creditEstimator: kling30TurboCreditEstimator },
   { id: 'kling-3.0/video', name: 'Kling 3.0', provider: 'Kuaishou', category: 'text-to-video', familyId: 'kling-3', familyName: 'Kling 3.0', modeName: 'Text to Video', params: kling30Params, creditEstimator: kling30CreditEstimator },
   { id: 'kling/2-6-text-to-video', name: 'Kling 2.6', provider: 'Kuaishou', category: 'text-to-video', params: kling26Params, creditEstimator: kling26CreditEstimator },
@@ -891,6 +919,7 @@ export const SUPPORTED_MODELS: AIModel[] = [
   { id: 'bytedance/v1-pro-image-to-video', name: 'Seedance V1 Pro I2V', provider: 'Bytedance', category: 'image-to-video', familyId: 'bytedance-seedance-v1-pro', familyName: 'Seedance V1 Pro', modeName: 'Image to Video', supportsImageUpload: true, params: bytedanceV1Params, creditEstimator: seedanceV1ProCreditEstimator },
   { id: 'bytedance/seedance-1.5-pro', name: 'Seedance 1.5 Pro I2V', provider: 'Bytedance', category: 'image-to-video', familyId: 'bytedance-seedance-1-5-pro', familyName: 'Seedance 1.5 Pro', modeName: 'Image to Video', supportsImageUpload: true, params: seedance15Params, creditEstimator: seedance15CreditEstimator },
   { id: 'bytedance/seedance-2', name: 'Seedance 2.0 I2V', provider: 'Bytedance', category: 'image-to-video', familyId: 'bytedance-seedance-2', familyName: 'Seedance 2.0', modeName: 'Image to Video', supportsImageUpload: true, params: seedance2Params, creditEstimator: seedance2CreditEstimator },
+  { id: 'bytedance/seedance-2-mini', name: 'Seedance 2.0 Mini I2V', provider: 'Bytedance', category: 'image-to-video', familyId: 'bytedance-seedance-2-mini', familyName: 'Seedance 2.0 Mini', modeName: 'Image to Video', supportsImageUpload: true, supportsVideoUpload: true, imageInputKey: 'first_frame_url', imageInputMode: 'single', videoInputKey: 'reference_video_urls', videoInputMode: 'array', params: seedance2MiniParams, creditEstimator: seedance2MiniCreditEstimator },
   { id: 'veo-3.1', name: 'Veo 3.1 I2V', provider: 'Google', category: 'image-to-video', familyId: 'google-veo-3-1', familyName: 'Veo 3.1', modeName: 'Image to Video', supportsImageUpload: true, params: veo31Params, creditEstimator: veo31CreditEstimator },
   { id: 'kling/v3-turbo-image-to-video', name: 'Kling 3.0 Turbo I2V', provider: 'Kuaishou', category: 'image-to-video', familyId: 'kling-3-turbo', familyName: 'Kling 3.0 Turbo', modeName: 'Image to Video', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: kling30TurboImageParams, creditEstimator: kling30TurboCreditEstimator },
   { id: 'kling-3.0/video', name: 'Kling 3.0 I2V', provider: 'Kuaishou', category: 'image-to-video', familyId: 'kling-3', familyName: 'Kling 3.0', modeName: 'Image to Video', supportsImageUpload: true, params: kling30Params, creditEstimator: kling30CreditEstimator },

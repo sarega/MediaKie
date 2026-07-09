@@ -112,7 +112,13 @@ const assignModelImageInput = (inputPayload: Record<string, any>, model: AIModel
 
 const assignModelVideoInput = (inputPayload: Record<string, any>, model: AIModel, videoUrl: string) => {
   if (!model.videoInputKey) return false;
-  inputPayload[model.videoInputKey] = model.videoInputMode === 'array' ? [videoUrl] : videoUrl;
+  if (model.videoInputMode === 'array') {
+    const existing = inputPayload[model.videoInputKey];
+    const existingUrls = Array.isArray(existing) ? existing : existing ? [existing] : [];
+    inputPayload[model.videoInputKey] = [...existingUrls, videoUrl];
+  } else {
+    inputPayload[model.videoInputKey] = videoUrl;
+  }
   return true;
 };
 
