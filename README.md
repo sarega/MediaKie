@@ -4,7 +4,7 @@ Kai Media Studio is a local web app for generating images and videos with Kie.ai
 
 ## Version
 
-Current version: `1.2.0`
+Current version: `1.3.0`
 
 ## What is included
 
@@ -57,6 +57,12 @@ npm run start
 ```
 
 ## Update log
+
+### 1.3.0 — 2026-08-03
+
+- Added Light and Dark theme selection in Settings with saved preferences.
+- Added PixVerse V6 and MiniMax H3 modes with live generation cost estimates.
+- Kept model Parameters open by default.
 
 ### 1.2.0 — 2026-06-19
 

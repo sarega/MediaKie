@@ -1,3 +1,5 @@
+export type AppTheme = 'dark' | 'light';
+
 export type ModelCategory = 'text-to-image' | 'image-to-image' | 'image-edit' | 'text-to-video' | 'image-to-video' | 'video-to-video' | 'text-to-text';
 
 export interface ModelParamConfig {
@@ -53,6 +55,7 @@ export interface AIModel {
       values: Record<string, number>;
       fallback?: number;
     };
+    creditsPerSecond?: number;
     creditsPerSecondByResolution?: Record<string, number>;
     creditsPerSecondByResolutionWithVideoInput?: Record<string, number>;
     multiplierByParam?: {
@@ -60,6 +63,11 @@ export interface AIModel {
       values: Record<string, number>;
     };
     quantityParamKey?: string;
+    additionalCreditsByQuantity?: {
+      key: string;
+      unitCredits: number;
+      freeQuantity?: number;
+    };
     sourceVideoParamKeys?: string[];
     minimumCredits?: number;
     round?: 'ceil' | 'round';
@@ -110,6 +118,13 @@ export const estimateModelCredits = (model: AIModel, params: Record<string, any>
     }
   }
 
+  if (estimator.creditsPerSecond) {
+    const duration = Number(params.duration ?? 1);
+    if (Number.isFinite(duration) && duration > 0) {
+      credits = estimator.creditsPerSecond * duration;
+    }
+  }
+
   const resolution = String(params.resolution ?? params.image_resolution ?? '');
   const resolutionRates = hasSourceVideo && estimator.creditsPerSecondByResolutionWithVideoInput
     ? estimator.creditsPerSecondByResolutionWithVideoInput
@@ -129,9 +144,19 @@ export const estimateModelCredits = (model: AIModel, params: Record<string, any>
   }
 
   if (estimator.quantityParamKey) {
-    const quantity = Number(params[estimator.quantityParamKey] ?? 1);
+    const value = params[estimator.quantityParamKey];
+    const quantity = Array.isArray(value) ? value.filter(Boolean).length : Number(value ?? 1);
     if (Number.isFinite(quantity) && quantity > 0) {
       credits *= quantity;
+    }
+  }
+
+  if (estimator.additionalCreditsByQuantity) {
+    const value = params[estimator.additionalCreditsByQuantity.key];
+    const quantity = Array.isArray(value) ? value.filter(Boolean).length : Number(value ?? 0);
+    const freeQuantity = estimator.additionalCreditsByQuantity.freeQuantity ?? 0;
+    if (Number.isFinite(quantity) && quantity > freeQuantity) {
+      credits += (quantity - freeQuantity) * estimator.additionalCreditsByQuantity.unitCredits;
     }
   }
 
@@ -264,6 +289,89 @@ const seedance2MiniParams: ModelParamConfig[] = [
   { name: 'Duration', key: 'duration', type: 'slider', min: 4, max: 15, step: 1, defaultValue: 15 },
   { name: 'Web Search', key: 'web_search', type: 'boolean', defaultValue: false },
   { name: 'NSFW Checker', key: 'nsfw_checker', type: 'boolean', defaultValue: true }
+];
+
+const pixverseQualityOptions = [
+  { label: '360p', value: '360p' },
+  { label: '540p', value: '540p' },
+  { label: '720p', value: '720p' },
+  { label: '1080p', value: '1080p' },
+];
+
+const pixverseAspectRatioOptions = [
+  { label: '16:9', value: '16:9' },
+  { label: '4:3', value: '4:3' },
+  { label: '1:1', value: '1:1' },
+  { label: '3:4', value: '3:4' },
+  { label: '9:16', value: '9:16' },
+  { label: '2:3', value: '2:3' },
+  { label: '3:2', value: '3:2' },
+  { label: '21:9', value: '21:9' },
+];
+
+const pixverseTextParams: ModelParamConfig[] = [
+  { name: 'Duration', key: 'duration', type: 'slider', min: 1, max: 15, step: 1, defaultValue: 5 },
+  { name: 'Quality', key: 'quality', type: 'select', options: pixverseQualityOptions, defaultValue: '720p' },
+  { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: pixverseAspectRatioOptions, defaultValue: '16:9' },
+  { name: 'Generate Audio', key: 'generate_audio_switch', type: 'boolean', defaultValue: false },
+  { name: 'Seed', key: 'seed', type: 'number', min: 0, max: 2147483647, step: 1, defaultValue: 0 },
+  { name: 'Multi-Clip', key: 'generate_multi_clip_switch', type: 'boolean', defaultValue: false },
+];
+
+const pixverseImageParams: ModelParamConfig[] = [
+  { name: 'Image URLs', key: 'image_urls', type: 'file', accept: 'image/*', multiple: true, maxFiles: 2, defaultValue: [] },
+  { name: 'Duration', key: 'duration', type: 'slider', min: 1, max: 15, step: 1, defaultValue: 5 },
+  { name: 'Quality', key: 'quality', type: 'select', options: pixverseQualityOptions, defaultValue: '720p' },
+  { name: 'Template ID', key: 'template_id', type: 'text', defaultValue: '' },
+  { name: 'Generate Audio', key: 'generate_audio_switch', type: 'boolean', defaultValue: false },
+  { name: 'Seed', key: 'seed', type: 'number', min: 0, max: 2147483647, step: 1, defaultValue: 0 },
+  { name: 'Multi-Clip', key: 'generate_multi_clip_switch', type: 'boolean', defaultValue: false },
+];
+
+const pixverseTransitionParams: ModelParamConfig[] = [
+  { name: 'Start Frame', key: 'first_frame_image_url', type: 'file', accept: 'image/*', defaultValue: '' },
+  { name: 'End Frame', key: 'last_frame_image_url', type: 'file', accept: 'image/*', defaultValue: '' },
+  { name: 'Duration', key: 'duration', type: 'slider', min: 1, max: 15, step: 1, defaultValue: 5 },
+  { name: 'Quality', key: 'quality', type: 'select', options: pixverseQualityOptions, defaultValue: '720p' },
+  { name: 'Generate Audio', key: 'generate_audio_switch', type: 'boolean', defaultValue: false },
+  { name: 'Seed', key: 'seed', type: 'number', min: 0, max: 2147483647, step: 1, defaultValue: 0 },
+];
+
+const pixverseReferenceParams: ModelParamConfig[] = [
+  { name: 'Reference Images', key: 'image_references', type: 'file', accept: 'image/*', multiple: true, maxFiles: 7, defaultValue: [], description: 'Upload 1-7 images. Use @ref_1, @ref_2, and so on in the prompt.' },
+  { name: 'Duration', key: 'duration', type: 'slider', min: 1, max: 15, step: 1, defaultValue: 5 },
+  { name: 'Quality', key: 'quality', type: 'select', options: pixverseQualityOptions, defaultValue: '720p' },
+  { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: pixverseAspectRatioOptions, defaultValue: '16:9' },
+  { name: 'Generate Audio', key: 'generate_audio_switch', type: 'boolean', defaultValue: false },
+  { name: 'Seed', key: 'seed', type: 'number', min: 0, max: 2147483647, step: 1, defaultValue: 0 },
+];
+
+const pixverseExtendParams: ModelParamConfig[] = [
+  { name: 'Parent Task ID', key: 'taskId', type: 'text', defaultValue: '', description: 'Use this or upload a source video.' },
+  { name: 'Source Video', key: 'video_url', type: 'file', accept: 'video/*', defaultValue: '' },
+  { name: 'Duration', key: 'duration', type: 'slider', min: 1, max: 15, step: 1, defaultValue: 5 },
+  { name: 'Quality', key: 'quality', type: 'select', options: pixverseQualityOptions, defaultValue: '720p' },
+  { name: 'Generate Audio', key: 'generate_audio_switch', type: 'boolean', defaultValue: false },
+  { name: 'Seed', key: 'seed', type: 'number', min: 0, max: 2147483647, step: 1, defaultValue: 0 },
+];
+
+const minimaxH3TextParams: ModelParamConfig[] = [
+  { name: 'Duration', key: 'duration', type: 'slider', min: 4, max: 15, step: 1, defaultValue: 6 },
+  { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: [{ label: '21:9', value: '21:9' }, ...aspectRatioOptions, { label: '4:3', value: '4:3' }, { label: '3:4', value: '3:4' }], defaultValue: '16:9' },
+];
+
+const minimaxH3ImageParams: ModelParamConfig[] = [
+  { name: 'First Frame', key: 'first_frame_url', type: 'file', accept: 'image/*', defaultValue: '' },
+  { name: 'Last Frame', key: 'last_frame_url', type: 'file', accept: 'image/*', defaultValue: '' },
+  { name: 'Duration', key: 'duration', type: 'slider', min: 4, max: 15, step: 1, defaultValue: 6 },
+];
+
+const minimaxH3ReferenceParams: ModelParamConfig[] = [
+  { name: 'Reference Images', key: 'reference_image_urls', type: 'file', accept: 'image/*', multiple: true, maxFiles: 9, defaultValue: [] },
+  { name: 'Reference Videos', key: 'reference_video_urls', type: 'file', accept: 'video/*', multiple: true, maxFiles: 3, defaultValue: [] },
+  { name: 'Reference Audio', key: 'reference_audio_urls', type: 'file', accept: 'audio/*', multiple: true, maxFiles: 3, defaultValue: [] },
+  { name: 'Duration', key: 'duration', type: 'slider', min: 4, max: 15, step: 1, defaultValue: 6 },
+  { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: [{ label: 'Adaptive', value: 'adaptive' }, { label: '21:9', value: '21:9' }, ...aspectRatioOptions, { label: '4:3', value: '4:3' }, { label: '3:4', value: '3:4' }], defaultValue: 'adaptive' },
 ];
 
 const kling30Params: ModelParamConfig[] = [
@@ -656,6 +764,59 @@ const seedance2MiniCreditEstimator: AIModel['creditEstimator'] = {
   round: 'ceil',
 };
 
+const pixverseCreditEstimator: AIModel['creditEstimator'] = {
+  label: 'Estimated from public Kie pricing',
+  creditsPerSecondByParamCombo: {
+    keys: ['quality', 'generate_audio_switch'],
+    values: {
+      '360p|false': 4,
+      '360p|true': 5.6,
+      '540p|false': 5.6,
+      '540p|true': 7.2,
+      '720p|false': 7.2,
+      '720p|true': 9.6,
+      '1080p|false': 14.4,
+      '1080p|true': 18.4,
+    },
+  },
+  round: 'ceil',
+};
+
+const pixverseReferenceCreditEstimator: AIModel['creditEstimator'] = {
+  label: 'Estimated from public Kie pricing',
+  creditsPerSecondByParamCombo: {
+    keys: ['quality', 'generate_audio_switch'],
+    values: {
+      '360p|false': 4.5,
+      '360p|true': 6.3,
+      '540p|false': 6.3,
+      '540p|true': 8.1,
+      '720p|false': 8.1,
+      '720p|true': 10.8,
+      '1080p|false': 16.2,
+      '1080p|true': 20.7,
+    },
+  },
+  round: 'ceil',
+};
+
+const minimaxH3CreditEstimator: AIModel['creditEstimator'] = {
+  label: 'Estimated from public Kie pricing',
+  creditsPerSecond: 36.5,
+  round: 'ceil',
+};
+
+const minimaxH3ReferenceCreditEstimator: AIModel['creditEstimator'] = {
+  label: 'Estimated from public Kie pricing; input video duration billed separately',
+  creditsPerSecond: 36.5,
+  additionalCreditsByQuantity: {
+    key: 'reference_image_urls',
+    unitCredits: 11,
+    freeQuantity: 5,
+  },
+  round: 'ceil',
+};
+
 const kling30CreditEstimator: AIModel['creditEstimator'] = {
   label: 'Estimated from public Kie pricing',
   creditsPerSecondByParamCombo: {
@@ -877,6 +1038,8 @@ export const SUPPORTED_MODELS: AIModel[] = [
   { id: 'bytedance/seedance-1.5-pro', name: 'Seedance 1.5 Pro', provider: 'Bytedance', category: 'text-to-video', familyId: 'bytedance-seedance-1-5-pro', familyName: 'Seedance 1.5 Pro', modeName: 'Text to Video', params: seedance15Params, creditEstimator: seedance15CreditEstimator },
   { id: 'bytedance/seedance-2', name: 'Seedance 2.0', provider: 'Bytedance', category: 'text-to-video', familyId: 'bytedance-seedance-2', familyName: 'Seedance 2.0', modeName: 'Text to Video', params: seedance2Params, creditEstimator: seedance2CreditEstimator },
   { id: 'bytedance/seedance-2-mini', name: 'Seedance 2.0 Mini', provider: 'Bytedance', category: 'text-to-video', familyId: 'bytedance-seedance-2-mini', familyName: 'Seedance 2.0 Mini', modeName: 'Text to Video', supportsVideoUpload: true, videoInputKey: 'reference_video_urls', videoInputMode: 'array', params: seedance2MiniParams, creditEstimator: seedance2MiniCreditEstimator },
+  { id: 'pixverse-v6/text-to-video', name: 'PixVerse V6', provider: 'PixVerse', category: 'text-to-video', familyId: 'pixverse-v6', familyName: 'PixVerse V6', modeName: 'Text to Video', params: pixverseTextParams, creditEstimator: pixverseCreditEstimator },
+  { id: 'minimax-h3/text-to-video', name: 'MiniMax H3', provider: 'MiniMax', category: 'text-to-video', familyId: 'minimax-h3', familyName: 'MiniMax H3', modeName: 'Text to Video', params: minimaxH3TextParams, creditEstimator: minimaxH3CreditEstimator },
   { id: 'kling/v3-turbo-text-to-video', name: 'Kling 3.0 Turbo', provider: 'Kuaishou', category: 'text-to-video', familyId: 'kling-3-turbo', familyName: 'Kling 3.0 Turbo', modeName: 'Text to Video', params: kling30TurboTextParams, creditEstimator: kling30TurboCreditEstimator },
   { id: 'kling-3.0/video', name: 'Kling 3.0', provider: 'Kuaishou', category: 'text-to-video', familyId: 'kling-3', familyName: 'Kling 3.0', modeName: 'Text to Video', params: kling30Params, creditEstimator: kling30CreditEstimator },
   { id: 'kling/2-6-text-to-video', name: 'Kling 2.6', provider: 'Kuaishou', category: 'text-to-video', params: kling26Params, creditEstimator: kling26CreditEstimator },
@@ -920,6 +1083,11 @@ export const SUPPORTED_MODELS: AIModel[] = [
   { id: 'bytedance/seedance-1.5-pro', name: 'Seedance 1.5 Pro I2V', provider: 'Bytedance', category: 'image-to-video', familyId: 'bytedance-seedance-1-5-pro', familyName: 'Seedance 1.5 Pro', modeName: 'Image to Video', supportsImageUpload: true, params: seedance15Params, creditEstimator: seedance15CreditEstimator },
   { id: 'bytedance/seedance-2', name: 'Seedance 2.0 I2V', provider: 'Bytedance', category: 'image-to-video', familyId: 'bytedance-seedance-2', familyName: 'Seedance 2.0', modeName: 'Image to Video', supportsImageUpload: true, params: seedance2Params, creditEstimator: seedance2CreditEstimator },
   { id: 'bytedance/seedance-2-mini', name: 'Seedance 2.0 Mini I2V', provider: 'Bytedance', category: 'image-to-video', familyId: 'bytedance-seedance-2-mini', familyName: 'Seedance 2.0 Mini', modeName: 'Image to Video', supportsImageUpload: true, supportsVideoUpload: true, imageInputKey: 'first_frame_url', imageInputMode: 'single', videoInputKey: 'reference_video_urls', videoInputMode: 'array', params: seedance2MiniParams, creditEstimator: seedance2MiniCreditEstimator },
+  { id: 'pixverse-v6/image-to-video', name: 'PixVerse V6 I2V', provider: 'PixVerse', category: 'image-to-video', familyId: 'pixverse-v6', familyName: 'PixVerse V6', modeName: 'Image to Video', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: pixverseImageParams, creditEstimator: pixverseCreditEstimator },
+  { id: 'pixverse-v6/transition', name: 'PixVerse V6 Transition', provider: 'PixVerse', category: 'image-to-video', familyId: 'pixverse-v6', familyName: 'PixVerse V6', modeName: 'Transition', supportsImageUpload: true, imageInputKey: 'first_frame_image_url', imageInputMode: 'single', params: pixverseTransitionParams, creditEstimator: pixverseCreditEstimator },
+  { id: 'pixverse-v6/reference-to-video', name: 'PixVerse V6 Reference', provider: 'PixVerse', category: 'image-to-video', familyId: 'pixverse-v6', familyName: 'PixVerse V6', modeName: 'Reference to Video', supportsImageUpload: true, imageInputKey: 'image_references', imageInputMode: 'array', params: pixverseReferenceParams, creditEstimator: pixverseReferenceCreditEstimator },
+  { id: 'minimax-h3/image-to-video', name: 'MiniMax H3 I2V', provider: 'MiniMax', category: 'image-to-video', familyId: 'minimax-h3', familyName: 'MiniMax H3', modeName: 'Image to Video', supportsImageUpload: true, imageInputKey: 'first_frame_url', imageInputMode: 'single', params: minimaxH3ImageParams, creditEstimator: minimaxH3CreditEstimator },
+  { id: 'minimax-h3/reference-to-video', name: 'MiniMax H3 Reference', provider: 'MiniMax', category: 'image-to-video', familyId: 'minimax-h3', familyName: 'MiniMax H3', modeName: 'Reference to Video', supportsImageUpload: true, supportsVideoUpload: true, imageInputKey: 'reference_image_urls', imageInputMode: 'array', videoInputKey: 'reference_video_urls', videoInputMode: 'array', params: minimaxH3ReferenceParams, creditEstimator: minimaxH3ReferenceCreditEstimator },
   { id: 'veo-3.1', name: 'Veo 3.1 I2V', provider: 'Google', category: 'image-to-video', familyId: 'google-veo-3-1', familyName: 'Veo 3.1', modeName: 'Image to Video', supportsImageUpload: true, params: veo31Params, creditEstimator: veo31CreditEstimator },
   { id: 'kling/v3-turbo-image-to-video', name: 'Kling 3.0 Turbo I2V', provider: 'Kuaishou', category: 'image-to-video', familyId: 'kling-3-turbo', familyName: 'Kling 3.0 Turbo', modeName: 'Image to Video', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: kling30TurboImageParams, creditEstimator: kling30TurboCreditEstimator },
   { id: 'kling-3.0/video', name: 'Kling 3.0 I2V', provider: 'Kuaishou', category: 'image-to-video', familyId: 'kling-3', familyName: 'Kling 3.0', modeName: 'Image to Video', supportsImageUpload: true, params: kling30Params, creditEstimator: kling30CreditEstimator },
@@ -939,6 +1107,7 @@ export const SUPPORTED_MODELS: AIModel[] = [
   { id: 'wan/2-6-video-to-video', name: 'Wan 2.6 V2V', provider: 'Wan', category: 'video-to-video', supportsVideoUpload: true, params: wanVideoToVideoParams },
   { id: 'wan/2-6-flash-video-to-video', name: 'Wan 2.6 Flash V2V', provider: 'Wan', category: 'video-to-video', supportsVideoUpload: true, videoInputKey: 'video_urls', videoInputMode: 'array', params: wanVideoToVideoParams },
   { id: 'wan/2-7-video-edit', name: 'Wan 2.7 Video Edit', provider: 'Wan', category: 'video-to-video', supportsVideoUpload: true, videoInputKey: 'video_urls', videoInputMode: 'array', params: wanVideoToVideoParams, creditEstimator: wan27VideoCreditEstimator },
+  { id: 'pixverse-v6/extend', name: 'PixVerse V6 Extend', provider: 'PixVerse', category: 'video-to-video', familyId: 'pixverse-v6', familyName: 'PixVerse V6', modeName: 'Extend', allowsPromptlessGeneration: true, supportsVideoUpload: true, videoInputKey: 'video_url', videoInputMode: 'single', params: pixverseExtendParams, creditEstimator: pixverseCreditEstimator },
   { id: 'grok-imagine/video-upscale', name: 'Grok Video Upscale', provider: 'xAI', category: 'video-to-video', supportsVideoUpload: true, videoInputKey: 'video_url', videoInputMode: 'single', params: topazVideoUpscaleParams },
   { id: 'grok-imagine/video-extend', name: 'Grok Video Extend', provider: 'xAI', category: 'video-to-video', supportsVideoUpload: true, videoInputKey: 'video_url', videoInputMode: 'single', params: grokImageToVideoParams, creditEstimator: grokVideoCreditEstimator },
   { id: 'topaz/video-upscale', name: 'Topaz Video Upscale', provider: 'Topaz', category: 'video-to-video', supportsVideoUpload: true, videoInputKey: 'video_url', videoInputMode: 'single', params: topazVideoUpscaleParams },

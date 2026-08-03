@@ -9,9 +9,10 @@ import { MediaWorkspace } from './components/MediaWorkspace';
 import { ActivityLog } from './components/ActivityLog';
 import { SettingsModal } from './components/SettingsModal';
 import { SUPPORTED_MODELS, GenerationLog, AIModel, Project } from './types';
+import type { AppTheme } from './types';
 import { Edit3, FolderOpen, GripVertical, LayoutGrid, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, Trash2, X } from 'lucide-react';
 
-const arrayUrlParams = new Set(['image_urls', 'input_urls', 'image_input', 'mask_url', 'reference_image_urls', 'reference_video_urls', 'reference_audio_urls', 'video_urls']);
+const arrayUrlParams = new Set(['image_urls', 'input_urls', 'image_input', 'mask_url', 'image_references', 'reference_image_urls', 'reference_video_urls', 'reference_audio_urls', 'video_urls']);
 type SourceAsset = { id: string; type: 'image' | 'video'; url: string; label?: string };
 type PaneSide = 'left' | 'right';
 
@@ -207,6 +208,7 @@ export default function App() {
   const [logs, setLogs] = useState<GenerationLog[]>([]);
   const [showSettings, setShowSettings] = useState(false);
   const [autoplayVideos, setAutoplayVideos] = useState(() => localStorage.getItem('kie_autoplay_videos') === 'true');
+  const [theme, setTheme] = useState<AppTheme>(() => localStorage.getItem('kie_theme') === 'light' ? 'light' : 'dark');
   const [projectDialog, setProjectDialog] = useState<{ mode: 'create' | 'rename'; name: string } | null>(null);
   const [credits, setCredits] = useState<number | string | null>(null);
   const [creditError, setCreditError] = useState('');
@@ -243,6 +245,11 @@ export default function App() {
   useEffect(() => {
     localStorage.setItem('kie_right_pane_width', String(rightPaneWidth));
   }, [rightPaneWidth]);
+
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme;
+    localStorage.setItem('kie_theme', theme);
+  }, [theme]);
 
   const startPaneResize = (side: PaneSide, event: React.MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
@@ -816,6 +823,52 @@ export default function App() {
         }
       }
 
+      const isPixverseExtend = selectedModel.id === 'pixverse-v6/extend';
+
+      if (selectedModel.id === 'pixverse-v6/image-to-video' && inputPayload.template_id) {
+        delete inputPayload.duration;
+      }
+
+      if (selectedModel.id === 'pixverse-v6/transition') {
+        if (!inputPayload.first_frame_image_url || !inputPayload.last_frame_image_url) {
+          throw new Error('PixVerse V6 Transition requires a start and end frame.');
+        }
+      }
+
+      if (selectedModel.id === 'pixverse-v6/image-to-video' && !inputPayload.image_urls?.length) {
+        throw new Error('PixVerse V6 Image to Video requires at least one source image.');
+      }
+
+      if (selectedModel.id === 'pixverse-v6/reference-to-video') {
+        if (!inputPayload.image_references?.length) {
+          throw new Error('PixVerse V6 Reference to Video requires at least one reference image.');
+        }
+        inputPayload.image_references = inputPayload.image_references.map((value: any, index: number) => (
+          typeof value === 'string'
+            ? { image_url: value, type: 'subject', ref_name: `ref_${index + 1}` }
+            : value
+        ));
+      }
+
+      if (isPixverseExtend) {
+        if (finalVideoStr) {
+          delete inputPayload.taskId;
+        } else if (inputPayload.taskId) {
+          delete inputPayload.video_url;
+        }
+        if (!inputPayload.taskId && !inputPayload.video_url) {
+          throw new Error('PixVerse V6 Extend requires a parent task ID or source video.');
+        }
+      }
+
+      if (selectedModel.id === 'minimax-h3/image-to-video' && !inputPayload.first_frame_url && !inputPayload.last_frame_url) {
+        throw new Error('MiniMax H3 Image to Video requires a first or last frame.');
+      }
+
+      if (selectedModel.id === 'minimax-h3/reference-to-video' && !inputPayload.reference_image_urls?.length && !inputPayload.reference_video_urls?.length) {
+        throw new Error('MiniMax H3 Reference to Video requires an image or video reference.');
+      }
+
       if ((selectedModel.category === 'image-to-image' || selectedModel.category === 'image-edit') && !finalImageStr) {
         throw new Error(`${selectedModel.name} requires a source image.`);
       }
@@ -824,7 +877,7 @@ export default function App() {
         throw new Error(`${selectedModel.name} requires a source image.`);
       }
 
-      if (selectedModel.category === 'video-to-video' && selectedModel.supportsVideoUpload && !finalVideoStr) {
+      if (selectedModel.category === 'video-to-video' && selectedModel.supportsVideoUpload && !finalVideoStr && !isPixverseExtend) {
         throw new Error(`${selectedModel.name} requires a source video.`);
       }
 
@@ -1338,9 +1391,11 @@ export default function App() {
       <SettingsModal
         isOpen={showSettings}
         autoplayVideos={autoplayVideos}
+        theme={theme}
         onClose={() => setShowSettings(false)}
-        onSaveSettings={(nextAutoplayVideos) => {
+        onSaveSettings={(nextAutoplayVideos, nextTheme) => {
           setAutoplayVideos(nextAutoplayVideos);
+          setTheme(nextTheme);
           fetchCredits();
         }}
       />

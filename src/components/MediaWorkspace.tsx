@@ -39,7 +39,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
   
   // Custom Parameters
   const [paramValues, setParamValues] = useState<Record<string, any>>({});
-  const [showSettings, setShowSettings] = useState(false);
+  const [showSettings, setShowSettings] = useState(true);
   const initializedModelRef = useRef('');
   const [openVoiceParamKey, setOpenVoiceParamKey] = useState<string | null>(null);
   const [voiceSearch, setVoiceSearch] = useState('');
@@ -726,7 +726,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
       {/* Header */}
       <div className="px-8 py-6 border-b border-neutral-800/50 flex justify-between items-center z-10 shrink-0">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight text-white mb-1">
+          <h2 className="text-2xl font-semibold tracking-tight text-neutral-100 mb-1">
             {workspaceMode === 'edit' ? (USE_CLYPRA_EDITOR ? 'Clypra Editor' : 'Video Editor') : selectedModel.name}
           </h2>
           <p className="text-neutral-400 font-mono text-xs">
@@ -744,7 +744,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
               className={cn(
                 "flex items-center gap-2 px-3 py-1.5 rounded text-sm transition-colors border",
                 showSettings
-                  ? "bg-neutral-800 text-white border-neutral-700"
+                  ? "bg-neutral-800 text-neutral-100 border-neutral-700"
                   : "bg-transparent text-neutral-400 border-transparent hover:bg-neutral-800/50 hover:text-neutral-200"
               )}
             >
