@@ -222,6 +222,18 @@ const seedream45TextToImageParams: ModelParamConfig[] = [
   { name: 'NSFW Checker', key: 'nsfw_checker', type: 'boolean', defaultValue: false }
 ];
 
+const seedream5ProParams: ModelParamConfig[] = [
+  { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: [{ label: '1:1', value: '1:1' }, { label: '4:3', value: '4:3' }, { label: '3:4', value: '3:4' }, { label: '16:9', value: '16:9' }, { label: '9:16', value: '9:16' }, { label: '2:3', value: '2:3' }, { label: '3:2', value: '3:2' }], defaultValue: '1:1' },
+  { name: 'Quality', key: 'quality', type: 'select', options: [{ label: 'Basic (1K)', value: 'basic' }, { label: 'High (2K)', value: 'high' }], defaultValue: 'basic' },
+  { name: 'Output Format', key: 'output_format', type: 'select', options: [{ label: 'PNG', value: 'png' }, { label: 'JPEG', value: 'jpeg' }], defaultValue: 'png' },
+  { name: 'NSFW Checker', key: 'nsfw_checker', type: 'boolean', defaultValue: true }
+];
+
+const seedream5ProImageParams: ModelParamConfig[] = [
+  { name: 'Reference Images', key: 'image_urls', type: 'file', accept: 'image/*', multiple: true, maxFiles: 10, defaultValue: [], description: 'JPEG, PNG, or WEBP. Kie supports up to 10 files, max 10MB each.' },
+  ...seedream5ProParams,
+];
+
 const seedream4EditParams: ModelParamConfig[] = [
   { name: 'Image Size', key: 'image_size', type: 'select', options: [{ label: 'Square HD', value: 'square_hd' }, { label: 'Square', value: 'square' }, { label: 'Portrait 4:3', value: 'portrait_4_3' }, { label: 'Portrait 16:9', value: 'portrait_16_9' }, { label: 'Landscape 4:3', value: 'landscape_4_3' }, { label: 'Landscape 16:9', value: 'landscape_16_9' }], defaultValue: 'square_hd' },
   { name: 'Resolution', key: 'image_resolution', type: 'select', options: [{ label: '1K', value: '1K' }, { label: '2K', value: '2K' }, { label: '4K', value: '4K' }], defaultValue: '1K' },
@@ -358,12 +370,14 @@ const pixverseExtendParams: ModelParamConfig[] = [
 const minimaxH3TextParams: ModelParamConfig[] = [
   { name: 'Duration', key: 'duration', type: 'slider', min: 4, max: 15, step: 1, defaultValue: 6 },
   { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: [{ label: '21:9', value: '21:9' }, ...aspectRatioOptions, { label: '4:3', value: '4:3' }, { label: '3:4', value: '3:4' }], defaultValue: '16:9' },
+  { name: 'Resolution', key: 'resolution', type: 'select', options: [{ label: '768P', value: '768P' }, { label: '2K', value: '2K' }], defaultValue: '2K' },
 ];
 
 const minimaxH3ImageParams: ModelParamConfig[] = [
   { name: 'First Frame', key: 'first_frame_url', type: 'file', accept: 'image/*', defaultValue: '' },
   { name: 'Last Frame', key: 'last_frame_url', type: 'file', accept: 'image/*', defaultValue: '' },
   { name: 'Duration', key: 'duration', type: 'slider', min: 4, max: 15, step: 1, defaultValue: 6 },
+  { name: 'Resolution', key: 'resolution', type: 'select', options: [{ label: '768P', value: '768P' }, { label: '2K', value: '2K' }], defaultValue: '2K' },
 ];
 
 const minimaxH3ReferenceParams: ModelParamConfig[] = [
@@ -372,6 +386,7 @@ const minimaxH3ReferenceParams: ModelParamConfig[] = [
   { name: 'Reference Audio', key: 'reference_audio_urls', type: 'file', accept: 'audio/*', multiple: true, maxFiles: 3, defaultValue: [] },
   { name: 'Duration', key: 'duration', type: 'slider', min: 4, max: 15, step: 1, defaultValue: 6 },
   { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: [{ label: 'Adaptive', value: 'adaptive' }, { label: '21:9', value: '21:9' }, ...aspectRatioOptions, { label: '4:3', value: '4:3' }, { label: '3:4', value: '3:4' }], defaultValue: 'adaptive' },
+  { name: 'Resolution', key: 'resolution', type: 'select', options: [{ label: '768P', value: '768P' }, { label: '2K', value: '2K' }], defaultValue: '2K' },
 ];
 
 const kling30Params: ModelParamConfig[] = [
@@ -644,6 +659,19 @@ const seedream45CreditEstimator = fixedCredits(6.5);
 
 const seedream5LiteCreditEstimator = fixedCredits(5.5);
 
+const seedream5ProCreditEstimator: AIModel['creditEstimator'] = {
+  label: 'Estimated from public Kie pricing',
+  creditsByParam: {
+    key: 'quality',
+    values: {
+      basic: 8,
+      high: 12,
+    },
+    fallback: 8,
+  },
+  round: 'ceil',
+};
+
 const zImageCreditEstimator = fixedCredits(0.8);
 
 const nanoBananaClassicCreditEstimator = fixedCredits(4);
@@ -800,15 +828,22 @@ const pixverseReferenceCreditEstimator: AIModel['creditEstimator'] = {
   round: 'ceil',
 };
 
+const minimaxH3CreditsPerSecondByResolution = {
+  '768P': 22.5,
+  '2K': 36.5,
+};
+
 const minimaxH3CreditEstimator: AIModel['creditEstimator'] = {
   label: 'Estimated from public Kie pricing',
   creditsPerSecond: 36.5,
+  creditsPerSecondByResolution: minimaxH3CreditsPerSecondByResolution,
   round: 'ceil',
 };
 
 const minimaxH3ReferenceCreditEstimator: AIModel['creditEstimator'] = {
   label: 'Estimated from public Kie pricing; input video duration billed separately',
   creditsPerSecond: 36.5,
+  creditsPerSecondByResolution: minimaxH3CreditsPerSecondByResolution,
   additionalCreditsByQuantity: {
     key: 'reference_image_urls',
     unitCredits: 11,
@@ -983,6 +1018,7 @@ export const SUPPORTED_MODELS: AIModel[] = [
   { id: 'bytedance/seedream-v4-text-to-image', name: 'Seedream 4.0', provider: 'Bytedance', category: 'text-to-image', params: seedream4TextToImageParams, creditEstimator: seedream4CreditEstimator },
   { id: 'seedream/4.5-text-to-image', name: 'Seedream 4.5', provider: 'Bytedance', category: 'text-to-image', params: seedream45TextToImageParams, creditEstimator: seedream45CreditEstimator },
   { id: 'seedream/5-lite-text-to-image', name: 'Seedream 5.0 Lite', provider: 'Bytedance', category: 'text-to-image', params: seedream45TextToImageParams, creditEstimator: seedream5LiteCreditEstimator },
+  { id: 'seedream/5-pro-text-to-image', name: 'Seedream 5.0 Pro', provider: 'Bytedance', category: 'text-to-image', params: seedream5ProParams, creditEstimator: seedream5ProCreditEstimator },
   { id: 'google/imagen4-fast', name: 'Imagen 4 Fast', provider: 'Google', category: 'text-to-image', params: googleImagenParams },
   { id: 'google/imagen4', name: 'Imagen 4', provider: 'Google', category: 'text-to-image', params: googleImagenParams },
   { id: 'google/imagen4-ultra', name: 'Imagen 4 Ultra', provider: 'Google', category: 'text-to-image', params: googleImagenParams, creditEstimator: fixedCredits(12, 'Estimated from public Kie pricing', 'num_images') },
@@ -1001,6 +1037,7 @@ export const SUPPORTED_MODELS: AIModel[] = [
   { id: 'wan/2-7-image-pro', name: 'Wan 2.7 Image Pro', provider: 'Wan', category: 'text-to-image', params: wanImageParams },
 
   // Image Models (Image to Image)
+  { id: 'seedream/5-pro-image-to-image', name: 'Seedream 5.0 Pro I2I', provider: 'Bytedance', category: 'image-to-image', params: seedream5ProImageParams, creditEstimator: seedream5ProCreditEstimator },
   { id: 'seedream/5-lite-image-to-image', name: 'Seedream 5.0 Lite I2I', provider: 'Bytedance', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: seedream45EditParams, creditEstimator: seedream5LiteCreditEstimator },
   { id: 'google/nano-banana-edit', name: 'Nano Banana Edit', provider: 'Google', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: nanoBananaClassicParams, creditEstimator: nanoBananaClassicCreditEstimator },
   { id: 'nano-banana-pro', name: 'Nano Banana Pro I2I', provider: 'Google', category: 'image-to-image', familyId: 'google-nano-banana-pro', familyName: 'Nano Banana Pro', modeName: 'Image to Image', supportsImageUpload: true, imageInputKey: 'image_input', imageInputMode: 'array', params: nanoBananaParams, creditEstimator: nanoBananaProCreditEstimator },

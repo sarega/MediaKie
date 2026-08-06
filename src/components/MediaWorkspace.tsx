@@ -30,6 +30,18 @@ const formatSeconds = (value: number) => {
   return `${Math.max(0, value).toFixed(1)}s`;
 };
 
+const previewJsonValue = (value: any): any => {
+  if (typeof value === 'string' && value.startsWith('data:')) {
+    const separator = value.indexOf(';');
+    return `[${separator > 5 ? value.slice(5, separator) : 'uploaded file'}]`;
+  }
+  if (Array.isArray(value)) return value.map(previewJsonValue);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, previewJsonValue(item)]));
+  }
+  return value;
+};
+
 export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGenerating, latestLog, sourceAsset }: Props) {
   const [workspaceMode, setWorkspaceMode] = useState<'create' | 'edit'>('create');
   const [prompt, setPrompt] = useState('');
@@ -40,6 +52,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
   // Custom Parameters
   const [paramValues, setParamValues] = useState<Record<string, any>>({});
   const [showSettings, setShowSettings] = useState(true);
+  const [settingsView, setSettingsView] = useState<'form' | 'json'>('form');
   const initializedModelRef = useRef('');
   const [openVoiceParamKey, setOpenVoiceParamKey] = useState<string | null>(null);
   const [voiceSearch, setVoiceSearch] = useState('');
@@ -456,6 +469,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
     ? (estimatedCredits * 0.005).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })
     : null;
   const canSubmit = Boolean(prompt.trim() || fileData || selectedModel.allowsPromptlessGeneration);
+  const inputJson = JSON.stringify({ prompt, ...previewJsonValue(paramValues) }, null, 2);
   
   const renderOutput = () => {
     if (isGenerating) {
@@ -724,7 +738,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
     <div className="flex flex-col h-full bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-neutral-900 to-neutral-950">
       
       {/* Header */}
-      <div className="px-8 py-6 border-b border-neutral-800/50 flex justify-between items-center z-10 shrink-0">
+      <div className="flex shrink-0 items-center justify-between border-b border-neutral-800/50 px-6 py-4 z-10">
         <div>
           <h2 className="text-2xl font-semibold tracking-tight text-neutral-100 mb-1">
             {workspaceMode === 'edit' ? (USE_CLYPRA_EDITOR ? 'Clypra Editor' : 'Video Editor') : selectedModel.name}
@@ -778,12 +792,12 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
       </div>
 
       {/* Main Area */}
-      <div className="flex-1 w-full relative flex overflow-hidden">
+      <div className="flex min-h-0 w-full flex-1 overflow-hidden relative">
         
         {workspaceMode === 'edit' ? (
           USE_CLYPRA_EDITOR ? <ClypraEditorHost /> : renderVideoEditor()
         ) : (
-          <div className="flex-1 w-full relative overflow-hidden flex items-center justify-center">
+          <div className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden relative">
             <AnimatePresence mode="wait">
               <motion.div
                 key={isGenerating ? 'generating' : (showFileOutput ? 'output' : 'empty')}
@@ -804,12 +818,55 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
           {workspaceMode === 'create' && showSettings && selectedModel.params && (
             <motion.div
               initial={{ width: 0, opacity: 0 }}
-              animate={{ width: 280, opacity: 1 }}
+              animate={{ width: 300, opacity: 1 }}
               exit={{ width: 0, opacity: 0 }}
-              className="border-l border-neutral-800/80 bg-neutral-900/60 backdrop-blur shrink-0 overflow-y-auto"
+              className="flex h-full min-h-0 shrink-0 flex-col overflow-hidden border-l border-neutral-800/80 bg-neutral-900/60 backdrop-blur"
             >
-              <div className="p-5 space-y-6 w-[280px]">
-                <h3 className="text-xs uppercase tracking-wider font-semibold text-neutral-400">Model Parameters</h3>
+              <div className="flex h-full min-h-0 w-[300px] flex-col p-4">
+                <div className="mb-4 flex shrink-0 items-center justify-between gap-3">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-400">Model Parameters</h3>
+                  <div className="grid grid-cols-2 gap-1 rounded-md border border-neutral-800 bg-neutral-950 p-1">
+                    <button
+                      type="button"
+                      onClick={() => setSettingsView('form')}
+                      className={cn(
+                        'rounded px-2 py-1 text-[11px] font-semibold uppercase tracking-wider transition-colors',
+                        settingsView === 'form' ? 'bg-neutral-700 text-neutral-100' : 'text-neutral-500 hover:text-neutral-200'
+                      )}
+                    >
+                      Form
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSettingsView('json')}
+                      className={cn(
+                        'rounded px-2 py-1 text-[11px] font-semibold uppercase tracking-wider transition-colors',
+                        settingsView === 'json' ? 'bg-indigo-500 text-white' : 'text-neutral-500 hover:text-neutral-200'
+                      )}
+                    >
+                      JSON
+                    </button>
+                  </div>
+                </div>
+                {settingsView === 'json' ? (
+                  <div className="flex min-h-0 flex-1 flex-col gap-3">
+                    <div className="flex shrink-0 items-center justify-between gap-2">
+                      <span className="text-xs text-neutral-500">Current input</span>
+                      <button
+                        type="button"
+                        onClick={() => navigator.clipboard?.writeText(inputJson)}
+                        className="flex items-center gap-1.5 rounded-md border border-neutral-800 px-2 py-1 text-xs text-neutral-400 transition hover:bg-neutral-800 hover:text-neutral-100"
+                      >
+                        <Copy className="h-3 w-3" />
+                        Copy
+                      </button>
+                    </div>
+                    <pre className="min-h-0 flex-1 overflow-auto rounded-lg border border-neutral-800 bg-neutral-950 p-3 font-mono text-[11px] leading-relaxed text-neutral-300 custom-scrollbar">
+                      {inputJson}
+                    </pre>
+                  </div>
+                ) : (
+                  <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 custom-scrollbar">
                 {selectedModel.params.map((param) => (
                   <div key={param.key} className="space-y-2">
                     <label className="text-sm font-medium text-neutral-300 block">
@@ -971,7 +1028,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
                                 {getParamPreviewKind(param.accept, value) === 'video' ? (
                                   <video
                                     src={String(value)}
-                                    className="h-24 w-full object-cover"
+                                    className="h-16 w-full object-cover"
                                     muted
                                     loop
                                     playsInline
@@ -980,7 +1037,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
                                   <img
                                     src={String(value)}
                                     alt={`${param.name} preview ${index + 1}`}
-                                    className="h-24 w-full object-cover"
+                                    className="h-16 w-full object-cover"
                                   />
                                 ) : (
                                   <div className="flex h-16 items-center px-3 text-xs text-neutral-400">
@@ -1032,6 +1089,8 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
                     )}
                   </div>
                 ))}
+                  </div>
+                )}
               </div>
             </motion.div>
           )}
@@ -1040,53 +1099,54 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
       </div>
 
       {/* 3. Input Controls Base (Fixed at bottom) */}
-      {workspaceMode === 'create' && <div className="shrink-0 p-8 pt-0 z-10 w-full relative z-20">
-        <div className="max-w-4xl mx-auto w-full bg-neutral-900/90 backdrop-blur-xl border border-neutral-800/80 rounded-2xl p-4 shadow-2xl flex flex-col gap-4">
+      {workspaceMode === 'create' && <div className="relative z-20 w-full shrink-0 px-4 pb-4 pt-0">
+        <div className="mx-auto flex w-full max-w-5xl flex-col gap-3 rounded-2xl border border-neutral-800/80 bg-neutral-900/90 p-3 shadow-2xl backdrop-blur-xl">
           
-          {(selectedModel.supportsImageUpload || selectedModel.supportsVideoUpload) && (
-            <div
-              className="flex flex-wrap gap-4 rounded-xl"
-              onDragOver={(e) => {
-                if (e.dataTransfer.types.includes('application/x-kie-media')) {
-                  e.preventDefault();
-                }
-              }}
-              onDrop={handleSourceDrop}
-            >
-              {fileData && (
-                <div className="relative group w-24 h-24 rounded-xl overflow-hidden border border-neutral-700 bg-neutral-800">
-                  {fileData.type === 'video' ? (
-                     <video src={fileData.bgUrl} className="w-full h-full object-cover" />
-                  ) : (
-                     <img src={fileData.bgUrl} alt="Upload" className="w-full h-full object-cover" />
-                  )}
-                  <button 
-                    onClick={() => setFileData(null)}
-                    className="absolute inset-0 bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-xs font-semibold text-white"
-                  >
-                    Remove
-                  </button>
-                </div>
-              )}
-
-              <button
-                onClick={() => fileInputRef.current?.click()}
-                className="w-24 h-24 flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-neutral-700 hover:bg-neutral-800 hover:border-neutral-500 transition-all text-neutral-400 group"
+          <div className="flex min-w-0 flex-1 flex-col gap-3 lg:flex-row lg:items-end">
+            {(selectedModel.supportsImageUpload || selectedModel.supportsVideoUpload) && (
+              <div
+                className="flex shrink-0 flex-wrap gap-2 rounded-xl"
+                onDragOver={(e) => {
+                  if (e.dataTransfer.types.includes('application/x-kie-media')) {
+                    e.preventDefault();
+                  }
+                }}
+                onDrop={handleSourceDrop}
               >
-                <Upload className="w-5 h-5 group-hover:-translate-y-1 transition-transform" />
-                <span className="text-xs font-medium text-center leading-tight">Upload or Drop</span>
-              </button>
-              <input 
-                type="file" 
-                ref={fileInputRef} 
-                className="hidden" 
-                accept={uploadAccept} 
-                onChange={handleFileDrop}
-              />
-            </div>
-          )}
+                {fileData && (
+                  <div className="relative group h-16 w-20 overflow-hidden rounded-xl border border-neutral-700 bg-neutral-800">
+                    {fileData.type === 'video' ? (
+                       <video src={fileData.bgUrl} className="w-full h-full object-cover" />
+                    ) : (
+                       <img src={fileData.bgUrl} alt="Upload" className="w-full h-full object-cover" />
+                    )}
+                    <button
+                      onClick={() => setFileData(null)}
+                      className="absolute inset-0 bg-black/60 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-xs font-semibold text-white"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )}
 
-          <div className="flex items-end gap-3">
+                <button
+                  onClick={() => fileInputRef.current?.click()}
+                  className="group flex h-16 w-20 flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-neutral-700 text-neutral-400 transition-all hover:border-neutral-500 hover:bg-neutral-800"
+                >
+                  <Upload className="w-5 h-5 group-hover:-translate-y-1 transition-transform" />
+                  <span className="text-xs font-medium text-center leading-tight">Upload or Drop</span>
+                </button>
+                <input
+                  type="file"
+                  ref={fileInputRef}
+                  className="hidden"
+                  accept={uploadAccept}
+                  onChange={handleFileDrop}
+                />
+              </div>
+            )}
+
+            <div className="flex min-w-0 flex-1 items-end gap-3">
             <div className="flex-1 min-h-[60px] relative rounded-xl border border-neutral-700/50 bg-neutral-950 flex focus-within:ring-2 ring-indigo-500/50 focus-within:border-indigo-500/50 transition-all">
               <textarea
                 value={prompt}
@@ -1106,7 +1166,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
               onClick={handleGenerate}
               disabled={isGenerating || !canSubmit}
               className={cn(
-                "h-[60px] px-8 rounded-xl font-medium flex items-center gap-2 transition-all shrink-0 shadow-lg",
+                "flex h-14 shrink-0 items-center gap-2 rounded-xl px-6 font-medium shadow-lg transition-all",
                 isGenerating 
                   ? "bg-indigo-500/50 text-white cursor-not-allowed" 
                   : "bg-indigo-500 hover:bg-indigo-400 text-white"
@@ -1125,6 +1185,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
                 </>
               )}
             </button>
+            </div>
           </div>
           {estimatedCredits && (
             <div className="flex items-center justify-end gap-2 text-xs text-neutral-400">

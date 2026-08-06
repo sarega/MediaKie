@@ -869,7 +869,13 @@ export default function App() {
         throw new Error('MiniMax H3 Reference to Video requires an image or video reference.');
       }
 
-      if ((selectedModel.category === 'image-to-image' || selectedModel.category === 'image-edit') && !finalImageStr) {
+      const hasParamImageInput = Boolean(selectedModel.imageInputKey && inputPayload[selectedModel.imageInputKey])
+        || Boolean(inputPayload.image_urls?.length)
+        || Boolean(inputPayload.image_url)
+        || Boolean(inputPayload.input_urls?.length)
+        || Boolean(inputPayload.input_url);
+
+      if ((selectedModel.category === 'image-to-image' || selectedModel.category === 'image-edit') && !finalImageStr && !hasParamImageInput) {
         throw new Error(`${selectedModel.name} requires a source image.`);
       }
 
