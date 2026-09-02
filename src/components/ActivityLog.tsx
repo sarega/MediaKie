@@ -5,7 +5,9 @@ import { AlertCircle, Clock, CheckCircle2, Copy, ExternalLink, ImagePlus, Trash2
 
 interface Props {
   logs: GenerationLog[];
+  activeLogId?: string;
   autoplayVideos: boolean;
+  onSelectLog: (id: string) => void;
   onUseAsSource: (asset: { type: 'image' | 'video'; url: string; label?: string }) => void;
   onGrabVideoFrame: (url: string) => void;
   onDeleteLog: (id: string) => void;
@@ -20,7 +22,7 @@ const formatDuration = (ms: number) => {
   return `${remainingSeconds}s`;
 };
 
-export function ActivityLog({ logs, autoplayVideos, onUseAsSource, onGrabVideoFrame, onDeleteLog }: Props) {
+export function ActivityLog({ logs, activeLogId, autoplayVideos, onSelectLog, onUseAsSource, onGrabVideoFrame, onDeleteLog }: Props) {
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -43,7 +45,19 @@ export function ActivityLog({ logs, autoplayVideos, onUseAsSource, onGrabVideoFr
         const isSourceMedia = log.type === 'image' || log.type === 'video';
 
         return (
-        <div key={log.id} className="p-4 flex flex-col gap-2 hover:bg-neutral-800/30 transition-colors">
+        <div
+          key={log.id}
+          role="button"
+          tabIndex={0}
+          onClick={() => onSelectLog(log.id)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' || event.key === ' ') {
+              event.preventDefault();
+              onSelectLog(log.id);
+            }
+          }}
+          className={`p-4 flex flex-col gap-2 cursor-pointer transition-colors ${log.id === activeLogId ? 'bg-indigo-500/10 ring-1 ring-inset ring-indigo-500/40' : 'hover:bg-neutral-800/30'}`}
+        >
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
               <span className="text-xs font-medium text-neutral-300 px-2 py-0.5 rounded-full bg-neutral-800">

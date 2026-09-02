@@ -3,8 +3,17 @@ import { History, Key, Moon, Sun, X } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import type { AppTheme } from '../types';
 
-const APP_VERSION = '1.3.0';
+const APP_VERSION = '1.4.0';
 const UPDATE_LOG = [
+  {
+    version: '1.4.0',
+    date: '2026-09-02',
+    changes: [
+      'Updated Kie models and credit estimates.',
+      'Added parallel generation and selectable activity items.',
+      'Credits now refresh automatically while jobs run and when they finish.',
+    ],
+  },
   {
     version: '1.3.0',
     date: '2026-08-03',

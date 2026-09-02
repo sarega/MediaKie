@@ -11,7 +11,7 @@ interface Props {
   selectedModel: AIModel;
   autoplayVideos: boolean;
   onGenerate: (prompt: string, imageBase64?: string, videoBase64?: string, params?: Record<string, any>) => void;
-  isGenerating: boolean;
+  isSubmitting: boolean;
   latestLog?: GenerationLog;
   sourceAsset?: { id: string; type: 'image' | 'video'; url: string; label?: string } | null;
 }
@@ -42,7 +42,7 @@ const previewJsonValue = (value: any): any => {
   return value;
 };
 
-export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGenerating, latestLog, sourceAsset }: Props) {
+export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSubmitting, latestLog, sourceAsset }: Props) {
   const [workspaceMode, setWorkspaceMode] = useState<'create' | 'edit'>('create');
   const [prompt, setPrompt] = useState('');
   
@@ -484,8 +484,9 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
     window.location.href = proxyUrl;
   };
 
-  const showFileOutput = !isGenerating && latestLog?.status === 'success' && latestLog.mediaUrl;
-  const showTextOutput = !isGenerating && latestLog?.status === 'success' && latestLog.textResult;
+  const isActiveLogGenerating = latestLog?.status === 'generating';
+  const showFileOutput = !isActiveLogGenerating && latestLog?.status === 'success' && latestLog.mediaUrl;
+  const showTextOutput = !isActiveLogGenerating && latestLog?.status === 'success' && latestLog.textResult;
   const estimatedCredits = estimateModelCredits(selectedModel, paramValues, fileData?.type, fileData?.duration);
   const estimatedUsd = estimatedCredits
     ? (estimatedCredits * 0.005).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })
@@ -494,7 +495,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
   const inputJson = JSON.stringify({ prompt, ...previewJsonValue(paramValues) }, null, 2);
   
   const renderOutput = () => {
-    if (isGenerating) {
+    if (isActiveLogGenerating) {
       return (
         <div className="flex flex-col items-center justify-center h-full text-indigo-400">
           <Loader2 className="w-10 h-10 animate-spin mb-4" />
@@ -822,7 +823,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
           <div className="flex min-h-0 w-full flex-1 items-center justify-center overflow-hidden relative">
             <AnimatePresence mode="wait">
               <motion.div
-                key={isGenerating ? 'generating' : (showFileOutput ? 'output' : 'empty')}
+                key={isActiveLogGenerating ? 'generating' : (showFileOutput ? 'output' : 'empty')}
                 initial={{ opacity: 0, scale: 0.98 }}
                 animate={{ opacity: 1, scale: 1 }}
                 exit={{ opacity: 0 }}
@@ -1186,18 +1187,18 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
             
             <button
               onClick={handleGenerate}
-              disabled={isGenerating || !canSubmit}
+              disabled={isSubmitting || !canSubmit}
               className={cn(
                 "flex h-14 shrink-0 items-center gap-2 rounded-xl px-6 font-medium shadow-lg transition-all",
-                isGenerating 
+                isSubmitting
                   ? "bg-indigo-500/50 text-white cursor-not-allowed" 
                   : "bg-indigo-500 hover:bg-indigo-400 text-white"
               )}
             >
-              {isGenerating ? (
+              {isSubmitting ? (
                 <>
                   <Loader2 className="w-4 h-4 animate-spin" />
-                  Generating...
+                  Submitting...
                 </>
               ) : (
                 <>

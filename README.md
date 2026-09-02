@@ -4,7 +4,7 @@ Kai Media Studio is a local web app for generating images and videos with Kie.ai
 
 ## Version
 
-Current version: `1.3.0`
+Current version: `1.4.0`
 
 ## What is included
 
@@ -57,6 +57,13 @@ npm run start
 ```
 
 ## Update log
+
+### 1.4.0 — 2026-09-02
+
+- Updated the Kie model catalog and credit estimates, including current image and video models.
+- Added parallel generation workflow: submit another job while earlier Kie tasks are processing.
+- Made Activity Log items selectable so completed or running jobs can be viewed in the main workspace.
+- Refresh credits automatically while jobs are running and as soon as each job completes.
 
 ### 1.3.0 — 2026-08-03
 

@@ -207,6 +207,7 @@ export default function App() {
   const [currentProjectId, setCurrentProjectId] = useState<string | null>(null);
   const [loadedProjectId, setLoadedProjectId] = useState<string | null>(null);
   const [logs, setLogs] = useState<GenerationLog[]>([]);
+  const [activeLogId, setActiveLogId] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [autoplayVideos, setAutoplayVideos] = useState(() => localStorage.getItem('kie_autoplay_videos') === 'true');
   const [theme, setTheme] = useState<AppTheme>(() => localStorage.getItem('kie_theme') === 'light' ? 'light' : 'dark');
@@ -229,6 +230,8 @@ export default function App() {
   const lastSubmissionRef = useRef<{ signature: string; timestamp: number } | null>(null);
   const frameVideoRef = useRef<HTMLVideoElement>(null);
   const currentProject = projects.find((project) => project.id === currentProjectId) || null;
+  const activeLog = logs.find((log) => log.id === activeLogId) || logs[0];
+  const hasGeneratingLogs = logs.some((log) => log.status === 'generating');
   const projectApiUrl = (path: string) => new URL(path, window.location.origin).toString();
 
   useEffect(() => {
@@ -352,8 +355,17 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    if (!hasGeneratingLogs) return;
+
+    fetchCredits();
+    const timer = window.setInterval(fetchCredits, 15_000);
+    return () => window.clearInterval(timer);
+  }, [hasGeneratingLogs]);
+
+  useEffect(() => {
     if (!currentProjectId) {
       setLogs([]);
+      setActiveLogId(null);
       lastPersistedLogsRef.current = JSON.stringify([]);
       setLoadedProjectId(null);
       setHistoryLoaded(true);
@@ -369,12 +381,14 @@ export default function App() {
         const serverLogs = Array.isArray(data.logs) ? data.logs : [];
         lastPersistedLogsRef.current = JSON.stringify(serverLogs);
         setLogs(serverLogs);
+        setActiveLogId(serverLogs[0]?.id || null);
         setLoadedProjectId(currentProjectId);
         localStorage.setItem('kie_current_project_id', currentProjectId);
       } catch (error) {
         console.warn('Failed to load project history.', error);
         lastPersistedLogsRef.current = JSON.stringify([]);
         setLogs([]);
+        setActiveLogId(null);
         setLoadedProjectId(currentProjectId);
       } finally {
         setHistoryLoaded(true);
@@ -615,6 +629,7 @@ export default function App() {
             textResult,
           } : l))
         );
+        fetchCredits();
         return;
       }
 
@@ -622,6 +637,7 @@ export default function App() {
         throw new Error('No media URL returned after generation success');
       }
 
+      fetchCredits();
       const localMediaUrls = await Promise.all(mediaUrls.map((url) => saveGeneratedMedia(url, type === 'video' ? 'video' : 'image')));
 
       setLogs((prev) =>
@@ -634,7 +650,6 @@ export default function App() {
           mediaUrls: localMediaUrls,
         } : l))
       );
-      fetchCredits();
     } catch (error: any) {
       setLogs((prev) =>
         prev.map((l) =>
@@ -695,6 +710,7 @@ export default function App() {
     };
 
     setLogs((prev) => [logEntry, ...prev]);
+    setActiveLogId(logEntry.id);
 
     try {
       const headers = getKieHeaders();
@@ -1218,8 +1234,8 @@ export default function App() {
           selectedModel={selectedModel} 
           autoplayVideos={autoplayVideos}
           onGenerate={handleGenerate} 
-          isGenerating={isCreateTaskPending || (logs.length > 0 && logs[0].status === 'generating')}
-          latestLog={logs[0]}
+          isSubmitting={isCreateTaskPending}
+          latestLog={activeLog}
           sourceAsset={sourceAsset}
         />
       </div>
@@ -1309,7 +1325,9 @@ export default function App() {
             {currentProject ? (
               <ActivityLog
                 logs={logs}
+                activeLogId={activeLog?.id}
                 autoplayVideos={autoplayVideos}
+                onSelectLog={setActiveLogId}
                 onUseAsSource={useAsSource}
                 onGrabVideoFrame={handleGrabVideoFrame}
                 onDeleteLog={handleDeleteLog}
