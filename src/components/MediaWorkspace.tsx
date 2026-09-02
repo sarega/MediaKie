@@ -47,7 +47,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
   const [prompt, setPrompt] = useState('');
   
   // Base64 files
-  const [fileData, setFileData] = useState<{ type: 'image' | 'video', bgUrl: string, b64: string } | null>(null);
+  const [fileData, setFileData] = useState<{ type: 'image' | 'video', bgUrl: string, b64: string, duration?: number } | null>(null);
   
   // Custom Parameters
   const [paramValues, setParamValues] = useState<Record<string, any>>({});
@@ -70,6 +70,14 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
     : selectedModel.supportsVideoUpload
       ? 'video/*'
       : 'image/*';
+
+  const readVideoDuration = (url: string) => new Promise<number | undefined>((resolve) => {
+    const video = document.createElement('video');
+    video.preload = 'metadata';
+    video.onloadedmetadata = () => resolve(Number.isFinite(video.duration) ? video.duration : undefined);
+    video.onerror = () => resolve(undefined);
+    video.src = url;
+  });
 
   useEffect(() => {
     const modelKey = `${selectedModel.category}:${selectedModel.id}`;
@@ -108,6 +116,12 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
       bgUrl: sourceAsset.url,
       b64: sourceAsset.url,
     });
+    if (sourceAsset.type === 'video') {
+      void readVideoDuration(sourceAsset.url).then((duration) => {
+        if (duration === undefined) return;
+        setFileData((current) => current?.type === 'video' && current.b64 === sourceAsset.url ? { ...current, duration } : current);
+      });
+    }
   }, [sourceAsset, selectedModel]);
 
   const handleGenerate = () => {
@@ -136,10 +150,12 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
       const b64 = await toBase64(file);
       const isVideo = file.type.startsWith('video/');
       const bgUrl = URL.createObjectURL(file);
+      const duration = isVideo ? await readVideoDuration(bgUrl) : undefined;
       setFileData({
         type: isVideo ? 'video' : 'image',
         bgUrl,
-        b64
+        b64,
+        duration,
       });
     } catch (e) {
       console.error(e);
@@ -150,6 +166,12 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
     const isSupported = type === 'image' ? selectedModel.supportsImageUpload : selectedModel.supportsVideoUpload;
     if (!isSupported) return;
     setFileData({ type, bgUrl: url, b64: url });
+    if (type === 'video') {
+      void readVideoDuration(url).then((duration) => {
+        if (duration === undefined) return;
+        setFileData((current) => current?.type === 'video' && current.b64 === url ? { ...current, duration } : current);
+      });
+    }
   };
 
   const handleSourceDrop = (e: React.DragEvent<HTMLDivElement>) => {
@@ -464,7 +486,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
 
   const showFileOutput = !isGenerating && latestLog?.status === 'success' && latestLog.mediaUrl;
   const showTextOutput = !isGenerating && latestLog?.status === 'success' && latestLog.textResult;
-  const estimatedCredits = estimateModelCredits(selectedModel, paramValues, fileData?.type);
+  const estimatedCredits = estimateModelCredits(selectedModel, paramValues, fileData?.type, fileData?.duration);
   const estimatedUsd = estimatedCredits
     ? (estimatedCredits * 0.005).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })
     : null;
@@ -1187,16 +1209,24 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isGe
             </button>
             </div>
           </div>
-          {estimatedCredits && (
+          {estimatedCredits ? (
             <div className="flex items-center justify-end gap-2 text-xs text-neutral-400">
               <Wallet className="w-3.5 h-3.5 text-emerald-400" />
               <span>
                 Estimated generation cost: <span className="font-semibold text-neutral-200">{estimatedCredits} credits</span>
                 {estimatedUsd && <span> (~${estimatedUsd})</span>}
+                {fileData?.type === 'video' && fileData.duration && selectedModel.creditEstimator?.billsSourceVideoDuration && (
+                  <span> (includes {formatSeconds(fileData.duration)} source)</span>
+                )}
               </span>
               {selectedModel.creditEstimator?.label && (
                 <span className="text-neutral-600">({selectedModel.creditEstimator.label})</span>
               )}
+            </div>
+          ) : (
+            <div className="flex items-center justify-end gap-2 text-xs text-amber-400/80">
+              <Wallet className="w-3.5 h-3.5" />
+              <span>Kie pricing is pending verification for this model.</span>
             </div>
           )}
         </div>

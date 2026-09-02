@@ -124,6 +124,7 @@ const assignModelVideoInput = (inputPayload: Record<string, any>, model: AIModel
 };
 
 const isVeoModel = (modelId: string) => modelId === 'veo-3.1' || modelId.startsWith('veo/');
+const isGeminiOmniVideoModel = (model: AIModel) => model.id === 'gemini-omni-video' || model.familyId === 'google-gemini-omni-flash-1-1';
 
 const getVeoCreateEndpoint = (modelId: string) => {
   if (modelId === 'veo/extend') return '/api/kie/api/v1/veo/extend';
@@ -771,7 +772,7 @@ export default function App() {
           // Model-specific video source key is defined in the catalog.
         } else if (selectedModel.id === 'bytedance/seedance-2') {
           inputPayload.reference_video_urls = [finalVideoStr];
-        } else if (selectedModel.id === 'gemini-omni-video') {
+        } else if (isGeminiOmniVideoModel(selectedModel)) {
           inputPayload.video_list = [{
             url: finalVideoStr,
             start: Number(inputPayload.video_start || 0),
@@ -971,7 +972,7 @@ export default function App() {
         inputPayload.sync_mode = false;
       }
 
-      if (selectedModel.id === 'gemini-omni-video') {
+      if (isGeminiOmniVideoModel(selectedModel)) {
         if (typeof inputPayload.audio_ids === 'string') {
           inputPayload.audio_ids = inputPayload.audio_ids.split(',').map((item: string) => item.trim()).filter(Boolean);
         }
