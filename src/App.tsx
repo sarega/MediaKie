@@ -10,11 +10,15 @@ import { ActivityLog } from './components/ActivityLog';
 import { SettingsModal } from './components/SettingsModal';
 import { SUPPORTED_MODELS, GenerationLog, AIModel, Project } from './types';
 import type { AppTheme } from './types';
+import { createHistoryApi } from './lib/historyApi';
+import { pollKieTask } from './lib/kieTaskPolling';
 import { Edit3, FolderOpen, GripVertical, LayoutGrid, PanelLeftClose, PanelLeftOpen, PanelRightClose, PanelRightOpen, Plus, Trash2, X } from 'lucide-react';
 
 const arrayUrlParams = new Set(['image_urls', 'input_urls', 'image_input', 'mask_url', 'image_references', 'reference_image_urls', 'reference_video_urls', 'reference_audio_urls', 'video_urls']);
 type SourceAsset = { id: string; type: 'image' | 'video'; url: string; label?: string };
 type PaneSide = 'left' | 'right';
+
+const logKey = (projectId: string, id: string) => `${projectId}:${id}`;
 
 const PANE_WIDTHS = {
   leftDefault: 288,
@@ -26,7 +30,9 @@ const PANE_WIDTHS = {
 const clampPaneWidth = (value: number) => Math.min(PANE_WIDTHS.max, Math.max(PANE_WIDTHS.min, value));
 
 const readStoredPaneWidth = (key: string, fallback: number) => {
-  const value = Number(localStorage.getItem(key));
+  const stored = localStorage.getItem(key);
+  if (!stored?.trim()) return fallback;
+  const value = Number(stored);
   return Number.isFinite(value) ? clampPaneWidth(value) : fallback;
 };
 
@@ -217,15 +223,21 @@ export default function App() {
   const [isLoadingCredits, setIsLoadingCredits] = useState(false);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [historyBackfilled, setHistoryBackfilled] = useState(false);
+  const [historySaveError, setHistorySaveError] = useState('');
+  const [historyRetryToken, setHistoryRetryToken] = useState(0);
   const [sourceAsset, setSourceAsset] = useState<SourceAsset | null>(null);
   const [frameGrabber, setFrameGrabber] = useState<{ url: string; time: number; duration: number } | null>(null);
   const [isCreateTaskPending, setIsCreateTaskPending] = useState(false);
+  const [isCompactLayout, setIsCompactLayout] = useState(() => window.matchMedia('(max-width: 900px)').matches);
   const [leftPaneOpen, setLeftPaneOpen] = useState(() => localStorage.getItem('kie_left_pane_open') !== 'false');
   const [rightPaneOpen, setRightPaneOpen] = useState(() => localStorage.getItem('kie_right_pane_open') !== 'false');
   const [leftPaneWidth, setLeftPaneWidth] = useState(() => readStoredPaneWidth('kie_left_pane_width', PANE_WIDTHS.leftDefault));
   const [rightPaneWidth, setRightPaneWidth] = useState(() => readStoredPaneWidth('kie_right_pane_width', PANE_WIDTHS.rightDefault));
-  const lastPersistedLogsRef = useRef('');
+  const [historyApi] = useState(createHistoryApi);
+  const persistedLogSignaturesRef = useRef(new Map<string, string>());
+  const currentProjectIdRef = useRef<string | null>(null);
   const activePollsRef = useRef(new Set<string>());
+  const cancelledLogKeysRef = useRef(new Set<string>());
   const createTaskInFlightRef = useRef(false);
   const lastSubmissionRef = useRef<{ signature: string; timestamp: number } | null>(null);
   const frameVideoRef = useRef<HTMLVideoElement>(null);
@@ -233,6 +245,33 @@ export default function App() {
   const activeLog = logs.find((log) => log.id === activeLogId) || logs[0];
   const hasGeneratingLogs = logs.some((log) => log.status === 'generating');
   const projectApiUrl = (path: string) => new URL(path, window.location.origin).toString();
+
+  useEffect(() => {
+    currentProjectIdRef.current = currentProjectId;
+  }, [currentProjectId]);
+
+  useEffect(() => {
+    const mediaQuery = window.matchMedia('(max-width: 900px)');
+    const updateLayout = () => setIsCompactLayout(mediaQuery.matches);
+    updateLayout();
+    mediaQuery.addEventListener('change', updateLayout);
+    return () => mediaQuery.removeEventListener('change', updateLayout);
+  }, []);
+
+  useEffect(() => {
+    if (isCompactLayout && leftPaneOpen && rightPaneOpen) setRightPaneOpen(false);
+  }, [isCompactLayout, leftPaneOpen, rightPaneOpen]);
+
+  useEffect(() => {
+    if (!isCompactLayout || (!leftPaneOpen && !rightPaneOpen)) return;
+    const closePaneOnEscape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (leftPaneOpen) setLeftPaneOpen(false);
+      else setRightPaneOpen(false);
+    };
+    window.addEventListener('keydown', closePaneOnEscape);
+    return () => window.removeEventListener('keydown', closePaneOnEscape);
+  }, [isCompactLayout, leftPaneOpen, rightPaneOpen]);
 
   useEffect(() => {
     localStorage.setItem('kie_left_pane_open', String(leftPaneOpen));
@@ -281,6 +320,21 @@ export default function App() {
     document.body.style.userSelect = 'none';
     window.addEventListener('mousemove', handleMouseMove);
     window.addEventListener('mouseup', stopResize);
+  };
+
+  const openPane = (side: PaneSide) => {
+    if (side === 'left') {
+      if (isCompactLayout) setRightPaneOpen(false);
+      setLeftPaneOpen(true);
+    } else {
+      if (isCompactLayout) setLeftPaneOpen(false);
+      setRightPaneOpen(true);
+    }
+  };
+
+  const closePane = (side: PaneSide) => {
+    if (side === 'left') setLeftPaneOpen(false);
+    else setRightPaneOpen(false);
   };
 
   useEffect(() => {
@@ -363,52 +417,88 @@ export default function App() {
   }, [hasGeneratingLogs]);
 
   useEffect(() => {
+    let cancelled = false;
     if (!currentProjectId) {
       setLogs([]);
       setActiveLogId(null);
-      lastPersistedLogsRef.current = JSON.stringify([]);
+      persistedLogSignaturesRef.current.clear();
       setLoadedProjectId(null);
       setHistoryLoaded(true);
+      setHistorySaveError('');
       return;
     }
 
+    const projectId = currentProjectId;
     const loadProjectHistory = async () => {
       setHistoryLoaded(false);
       setHistoryBackfilled(false);
+      persistedLogSignaturesRef.current.clear();
+      setHistorySaveError('');
       try {
-        const res = await fetch(projectApiUrl(`/api/projects/${encodeURIComponent(currentProjectId)}/history`));
+        const res = await fetch(projectApiUrl(`/api/projects/${encodeURIComponent(projectId)}/history`));
         const data = await res.json();
+        if (cancelled) return;
         const serverLogs = Array.isArray(data.logs) ? data.logs : [];
-        lastPersistedLogsRef.current = JSON.stringify(serverLogs);
+        persistedLogSignaturesRef.current = new Map(serverLogs.map((log: GenerationLog) => [log.id, JSON.stringify(log)]));
         setLogs(serverLogs);
         setActiveLogId(serverLogs[0]?.id || null);
-        setLoadedProjectId(currentProjectId);
-        localStorage.setItem('kie_current_project_id', currentProjectId);
+        setLoadedProjectId(projectId);
+        localStorage.setItem('kie_current_project_id', projectId);
       } catch (error) {
+        if (cancelled) return;
         console.warn('Failed to load project history.', error);
-        lastPersistedLogsRef.current = JSON.stringify([]);
+        setHistorySaveError('Unable to load project history.');
         setLogs([]);
         setActiveLogId(null);
-        setLoadedProjectId(currentProjectId);
+        setLoadedProjectId(projectId);
       } finally {
-        setHistoryLoaded(true);
+        if (!cancelled) setHistoryLoaded(true);
       }
     };
 
     loadProjectHistory();
+    return () => { cancelled = true; };
   }, [currentProjectId]);
 
   useEffect(() => {
     if (!historyLoaded || !currentProjectId || loadedProjectId !== currentProjectId) return;
-    const serializedLogs = JSON.stringify(logs);
-    if (serializedLogs === lastPersistedLogsRef.current) return;
-    lastPersistedLogsRef.current = serializedLogs;
-    fetch(projectApiUrl(`/api/projects/${encodeURIComponent(currentProjectId)}/history`), {
-      method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ logs }),
-    }).catch((error) => console.warn('Failed to persist server history.', error));
-  }, [logs, historyLoaded, currentProjectId, loadedProjectId]);
+    const persisted = persistedLogSignaturesRef.current;
+    const currentSignatures = new Map(logs.map((log) => [log.id, JSON.stringify(log)]));
+    const changedLogs = logs.filter((log) => persisted.get(log.id) !== currentSignatures.get(log.id));
+    const deletedIds = [...persisted.keys()].filter((id) => !currentSignatures.has(id));
+    if (changedLogs.length === 0 && deletedIds.length === 0) return;
+
+    changedLogs.forEach((log) => {
+      const signature = currentSignatures.get(log.id)!;
+      historyApi.saveLog(currentProjectId, log)
+        .then(() => {
+          if (currentProjectIdRef.current === currentProjectId) {
+            persistedLogSignaturesRef.current.set(log.id, signature);
+          }
+          if (currentProjectIdRef.current === currentProjectId) setHistorySaveError('');
+        })
+        .catch((error) => {
+          if (currentProjectIdRef.current === currentProjectId) {
+            setHistorySaveError(error.message || 'Unable to save project history.');
+          }
+        });
+    });
+
+    deletedIds.forEach((id) => {
+      historyApi.deleteLog(currentProjectId, id)
+        .then(() => {
+          if (currentProjectIdRef.current === currentProjectId) {
+            persistedLogSignaturesRef.current.delete(id);
+            setHistorySaveError('');
+          }
+        })
+        .catch((error) => {
+          if (currentProjectIdRef.current === currentProjectId) {
+            setHistorySaveError(error.message || 'Unable to remove history item.');
+          }
+        });
+    });
+  }, [logs, historyLoaded, currentProjectId, loadedProjectId, historyRetryToken]);
 
   useEffect(() => {
     if (!historyLoaded || loadedProjectId !== currentProjectId) return;
@@ -425,10 +515,10 @@ export default function App() {
     }));
   }, [historyLoaded, loadedProjectId, currentProjectId]);
 
-  const saveGeneratedMedia = async (url: string, type: 'image' | 'video') => {
+  const saveGeneratedMedia = async (url: string, type: 'image' | 'video', projectId = currentProjectId) => {
     try {
-      const endpoint = currentProjectId
-        ? projectApiUrl(`/api/projects/${encodeURIComponent(currentProjectId)}/library/save-url`)
+      const endpoint = projectId
+        ? projectApiUrl(`/api/projects/${encodeURIComponent(projectId)}/library/save-url`)
         : projectApiUrl('/api/library/save-url');
       const res = await fetch(endpoint, {
         method: 'POST',
@@ -446,6 +536,8 @@ export default function App() {
   useEffect(() => {
     if (!historyLoaded || loadedProjectId !== currentProjectId || historyBackfilled || logs.length === 0) return;
 
+    const projectId = currentProjectId;
+    let cancelled = false;
     const backfillRemoteMedia = async () => {
       let changed = false;
       const updatedLogs = await Promise.all(logs.map(async (log) => {
@@ -453,7 +545,7 @@ export default function App() {
         const urls = (log.mediaUrls && log.mediaUrls.length > 0 ? log.mediaUrls : [log.mediaUrl]).filter(Boolean) as string[];
         if (urls.length === 0 || urls.every((url) => url.startsWith('/library/') || url.startsWith('/projects/') || url.startsWith('data:'))) return log;
 
-        const localUrls = await Promise.all(urls.map((url) => saveGeneratedMedia(url, log.type)));
+        const localUrls = await Promise.all(urls.map((url) => saveGeneratedMedia(url, log.type, projectId)));
         if (localUrls.some((url, index) => url !== urls[index])) {
           changed = true;
           return { ...log, mediaUrl: localUrls[0], mediaUrls: localUrls };
@@ -461,6 +553,7 @@ export default function App() {
         return log;
       }));
 
+      if (cancelled || currentProjectIdRef.current !== projectId) return;
       if (changed) {
         setLogs(updatedLogs);
       }
@@ -468,6 +561,7 @@ export default function App() {
     };
 
     backfillRemoteMedia();
+    return () => { cancelled = true; };
   }, [historyLoaded, loadedProjectId, currentProjectId, historyBackfilled, logs]);
 
   const extractFrameFromVideo = (url: string) => {
@@ -564,16 +658,57 @@ export default function App() {
   };
 
   const handleDeleteLog = async (id: string) => {
-    setLogs((prev) => prev.filter((log) => log.id !== id));
-    if (!currentProjectId) return;
-    fetch(projectApiUrl(`/api/projects/${encodeURIComponent(currentProjectId)}/history/${encodeURIComponent(id)}`), { method: 'DELETE' }).catch((error) => {
-      console.warn('Failed to delete history item on server.', error);
+    const projectId = currentProjectId;
+    const log = logs.find((item) => item.id === id);
+    if (!projectId || !log) return;
+    if (!window.confirm('Remove this history item and its saved local media?')) return;
+    cancelledLogKeysRef.current.add(logKey(projectId, id));
+
+    try {
+      await historyApi.deleteLog(projectId, id);
+      if (currentProjectIdRef.current !== projectId) return;
+      persistedLogSignaturesRef.current.delete(id);
+      setLogs((prev) => prev.filter((item) => item.id !== id));
+    } catch (error: any) {
+      cancelledLogKeysRef.current.delete(logKey(projectId, id));
+      setHistorySaveError(error.message || 'Unable to remove history item.');
+    }
+  };
+
+  const updateLogForProject = (
+    projectId: string,
+    logId: string,
+    detachedLog: GenerationLog,
+    update: (log: GenerationLog) => GenerationLog,
+  ) => {
+    if (cancelledLogKeysRef.current.has(logKey(projectId, logId))) return;
+    if (currentProjectIdRef.current === projectId) {
+      setLogs((prev) => prev.map((log) => (log.id === logId ? update(log) : log)));
+      return;
+    }
+
+    void historyApi.saveLog(projectId, update(detachedLog)).catch((error) => {
+      console.warn('Failed to persist background task update.', error);
     });
   };
 
-  const pollTaskResult = async (logId: string, taskId: string, modelId: string, type: 'image' | 'video' | 'text') => {
-    if (activePollsRef.current.has(logId)) return;
-    activePollsRef.current.add(logId);
+  const updateCurrentLog = (projectId: string, logId: string, update: (log: GenerationLog) => GenerationLog) => {
+    if (cancelledLogKeysRef.current.has(logKey(projectId, logId))) return;
+    if (currentProjectIdRef.current !== projectId) return;
+    setLogs((prev) => prev.map((log) => (log.id === logId ? update(log) : log)));
+  };
+
+  const pollTaskResult = async (
+    logId: string,
+    taskId: string,
+    modelId: string,
+    type: 'image' | 'video' | 'text',
+    projectId: string,
+    initialLog: GenerationLog,
+  ) => {
+    const pollKey = logKey(projectId, logId);
+    if (activePollsRef.current.has(pollKey)) return;
+    activePollsRef.current.add(pollKey);
 
     try {
       const headers = getKieHeaders();
@@ -582,37 +717,41 @@ export default function App() {
       let mediaUrls: string[] = [];
       let textResult = '';
 
-      for (let attempt = 0; attempt < 300; attempt += 1) {
-        await new Promise(r => setTimeout(r, 3000));
+      updateCurrentLog(projectId, logId, (log) => ({
+        ...log,
+        status: 'generating',
+        pollingState: 'active',
+        error: undefined,
+      }));
 
-        const pollRes = await fetch(isVeo ? `/api/kie/api/v1/veo/record-info?taskId=${taskId}` : `/api/kie/api/v1/jobs/recordInfo?taskId=${taskId}`, {
-          method: 'GET',
-          headers,
-        });
+      const pollResult = await pollKieTask({
+        taskId,
+        isVeo,
+        headers,
+        onTransientError: (message) => updateCurrentLog(projectId, logId, (log) => ({
+          ...log,
+          status: 'generating',
+          pollingState: 'retrying',
+          error: `Unable to check task status. Will retry automatically. ${message}`,
+        })),
+      });
 
-        const pollData = await pollRes.json();
+      if (!pollResult.completed) {
+        updateLogForProject(projectId, logId, initialLog, (log) => ({
+          ...log,
+          status: 'generating',
+          pollingState: 'timed-out',
+          error: 'Automatic status checks timed out. The task is still saved; press Check status to continue.',
+        }));
+        return;
+      }
 
-        if (!isKieSuccessResponse(pollRes, pollData)) {
-          throw new Error(pollData.msg || pollData.error || 'Failed to query task status');
-        }
-
-        const state = isVeo ? pollData.data?.successFlag : pollData.data?.state;
-        if (state === 'success' || state === 1 || state === 'completed' || state === 'succeeded') {
-          const resultData = isVeo
-            ? (pollData.data?.resultUrls || pollData.data?.response?.resultUrls)
-            : (pollData.data?.resultJson || pollData.data?.resultUrls || pollData.data?.response);
-          if (type === 'text') {
-            textResult = normalizeTextResult(resultData || pollData.data?.response || pollData.data);
-          } else {
-            mediaUrls = normalizeResultUrls(resultData);
-            mediaUrl = mediaUrls[0] || '';
-          }
-          break;
-        }
-
-        if (state === 'fail' || state === 'failed' || state === 2 || state === 3 || state === 'error') {
-          throw new Error(pollData.data?.failMsg || 'Generation task failed');
-        }
+      const resultData = pollResult.resultData;
+      if (type === 'text') {
+        textResult = normalizeTextResult(resultData || pollResult.taskData || initialLog.textResult || '');
+      } else {
+        mediaUrls = normalizeResultUrls(resultData);
+        mediaUrl = mediaUrls[0] || '';
       }
 
       if (type === 'text') {
@@ -620,15 +759,15 @@ export default function App() {
           throw new Error('No ID or text result returned after generation success');
         }
 
-        setLogs((prev) =>
-          prev.map((l) => (l.id === logId ? {
-            ...l,
-            status: 'success',
-            completedAt: new Date().toISOString(),
-            durationMs: Date.now() - new Date(l.timestamp).getTime(),
-            textResult,
-          } : l))
-        );
+        updateLogForProject(projectId, logId, initialLog, (log) => ({
+          ...log,
+          status: 'success',
+          completedAt: new Date().toISOString(),
+          durationMs: Date.now() - new Date(log.timestamp).getTime(),
+          textResult,
+          pollingState: undefined,
+          error: undefined,
+        }));
         fetchCredits();
         return;
       }
@@ -637,37 +776,47 @@ export default function App() {
         throw new Error('No media URL returned after generation success');
       }
 
+      if (cancelledLogKeysRef.current.has(pollKey)) return;
       fetchCredits();
-      const localMediaUrls = await Promise.all(mediaUrls.map((url) => saveGeneratedMedia(url, type === 'video' ? 'video' : 'image')));
+      const localMediaUrls = await Promise.all(mediaUrls.map((url) => saveGeneratedMedia(url, type === 'video' ? 'video' : 'image', projectId)));
+      if (cancelledLogKeysRef.current.has(pollKey)) return;
 
-      setLogs((prev) =>
-        prev.map((l) => (l.id === logId ? {
-          ...l,
-          status: 'success',
-          completedAt: new Date().toISOString(),
-          durationMs: Date.now() - new Date(l.timestamp).getTime(),
-          mediaUrl: localMediaUrls[0],
-          mediaUrls: localMediaUrls,
-        } : l))
-      );
+      updateLogForProject(projectId, logId, initialLog, (log) => ({
+        ...log,
+        status: 'success',
+        completedAt: new Date().toISOString(),
+        durationMs: Date.now() - new Date(log.timestamp).getTime(),
+        mediaUrl: localMediaUrls[0],
+        mediaUrls: localMediaUrls,
+        pollingState: undefined,
+        error: undefined,
+      }));
     } catch (error: any) {
-      setLogs((prev) =>
-        prev.map((l) =>
-          l.id === logId
-            ? { ...l, status: 'failed', completedAt: new Date().toISOString(), durationMs: Date.now() - new Date(l.timestamp).getTime(), error: error.message || 'Unknown error' }
-            : l
-        )
-      );
+      updateLogForProject(projectId, logId, initialLog, (log) => ({
+        ...log,
+        status: 'failed',
+        pollingState: undefined,
+        completedAt: new Date().toISOString(),
+        durationMs: Date.now() - new Date(log.timestamp).getTime(),
+        error: error.message || 'Generation task failed',
+      }));
     } finally {
-      activePollsRef.current.delete(logId);
+      activePollsRef.current.delete(pollKey);
     }
+  };
+
+  const resumeTask = (logId: string) => {
+    const log = logs.find((item) => item.id === logId);
+    if (!currentProjectId || !log?.taskId || log.status !== 'generating') return;
+    void pollTaskResult(log.id, log.taskId, log.modelId, log.type, currentProjectId, log);
   };
 
   useEffect(() => {
     if (!historyLoaded || loadedProjectId !== currentProjectId) return;
+    const projectId = currentProjectId;
     logs.forEach((log) => {
-      if (log.status === 'generating' && log.taskId) {
-        pollTaskResult(log.id, log.taskId, log.modelId, log.type);
+      if (log.status === 'generating' && log.taskId && log.pollingState !== 'timed-out') {
+        pollTaskResult(log.id, log.taskId, log.modelId, log.type, projectId, log);
       }
     });
   }, [historyLoaded, loadedProjectId, currentProjectId, logs]);
@@ -677,6 +826,7 @@ export default function App() {
       alert('Open or create a project before generating media.');
       return;
     }
+    const projectId = currentProjectId;
 
     const submissionSignature = buildGenerationSignature(selectedModel, prompt, imageBase64, videoBase64, params);
     const now = Date.now();
@@ -704,6 +854,7 @@ export default function App() {
       provider: selectedModel.provider,
       prompt,
       status: 'generating',
+      pollingState: 'active',
       type: selectedModel.category === 'text-to-text'
         ? 'text'
         : selectedModel.category.includes('video') ? 'video' : 'image',
@@ -1077,18 +1228,26 @@ export default function App() {
       }
 
       const taskId = createData.data.taskId;
-      setLogs((prev) =>
-        prev.map((l) => (l.id === logEntry.id ? { ...l, taskId } : l))
-      );
-      pollTaskResult(logEntry.id, taskId, selectedModel.id, logEntry.type);
+      const taskLog = { ...logEntry, taskId };
+      if (currentProjectIdRef.current === projectId) {
+        setLogs((prev) => prev.map((l) => (l.id === logEntry.id ? taskLog : l)));
+      } else if (!cancelledLogKeysRef.current.has(logKey(projectId, logEntry.id))) {
+        void historyApi.saveLog(projectId, taskLog).catch((error) => {
+          console.warn('Failed to persist background task id.', error);
+        });
+      }
+      if (!cancelledLogKeysRef.current.has(logKey(projectId, logEntry.id))) {
+        void pollTaskResult(logEntry.id, taskId, selectedModel.id, logEntry.type, projectId, taskLog);
+      }
     } catch (error: any) {
-      setLogs((prev) =>
-        prev.map((l) =>
-          l.id === logEntry.id
-            ? { ...l, status: 'failed', completedAt: new Date().toISOString(), durationMs: Date.now() - new Date(l.timestamp).getTime(), error: error.message || 'Unknown error' }
-            : l
-        )
-      );
+      updateLogForProject(projectId, logEntry.id, logEntry, (log) => ({
+        ...log,
+        status: 'failed',
+        pollingState: undefined,
+        completedAt: new Date().toISOString(),
+        durationMs: Date.now() - new Date(log.timestamp).getTime(),
+        error: error.message || 'Unable to create generation task',
+      }));
     }
     finally {
       createTaskInFlightRef.current = false;
@@ -1145,19 +1304,21 @@ export default function App() {
   };
 
   const handleClearProject = async () => {
-    if (!currentProjectId || !currentProject) return;
+    const projectId = currentProjectId;
+    if (!projectId || !currentProject) return;
     if (!window.confirm(`Clear the Activity Log and referenced local media for "${currentProject.name}"?`)) return;
+    const cancelledKeys = logs.map((log) => logKey(projectId, log.id));
+    cancelledKeys.forEach((key) => cancelledLogKeysRef.current.add(key));
 
     try {
-      const res = await fetch(projectApiUrl(`/api/projects/${encodeURIComponent(currentProjectId)}/history`), { method: 'DELETE' });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Failed to clear project');
-      }
-      lastPersistedLogsRef.current = JSON.stringify([]);
+      await historyApi.clear(projectId);
+      if (currentProjectIdRef.current !== projectId) return;
+      persistedLogSignaturesRef.current.clear();
       setLogs([]);
+      setHistorySaveError('');
       await refreshProjects();
     } catch (error: any) {
+      cancelledKeys.forEach((key) => cancelledLogKeysRef.current.delete(key));
       alert(error.message || 'Unable to clear project.');
     }
   };
@@ -1167,7 +1328,8 @@ export default function App() {
     setLoadedProjectId(null);
     localStorage.removeItem('kie_current_project_id');
     setLogs([]);
-    lastPersistedLogsRef.current = JSON.stringify([]);
+    persistedLogSignaturesRef.current.clear();
+    setHistorySaveError('');
   };
 
   return (
@@ -1175,8 +1337,10 @@ export default function App() {
       {/* Sidebar - Models */}
       {leftPaneOpen ? (
         <div
-          className="bg-neutral-900 border-r border-neutral-800 flex flex-col shrink-0"
-          style={{ width: leftPaneWidth }}
+          className={isCompactLayout
+            ? 'fixed inset-y-0 left-0 z-40 flex shrink-0 flex-col border-r border-neutral-800 bg-neutral-900 shadow-2xl'
+            : 'flex shrink-0 flex-col border-r border-neutral-800 bg-neutral-900'}
+          style={{ width: isCompactLayout ? 'min(88vw, 360px)' : leftPaneWidth }}
         >
           <div className="p-4 border-b border-neutral-800 flex items-center gap-3">
             <div className="w-8 h-8 rounded-lg bg-indigo-500 flex items-center justify-center">
@@ -1185,7 +1349,7 @@ export default function App() {
             <h1 className="min-w-0 flex-1 truncate font-semibold text-lg tracking-tight">Kai Media Studio</h1>
             <button
               type="button"
-              onClick={() => setLeftPaneOpen(false)}
+              onClick={() => closePane('left')}
               className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-neutral-500 transition hover:bg-neutral-800 hover:text-neutral-100"
               title="Collapse model pane"
             >
@@ -1204,20 +1368,32 @@ export default function App() {
             />
           </div>
         </div>
-      ) : (
+      ) : !isCompactLayout ? (
         <div className="flex w-11 shrink-0 flex-col items-center border-r border-neutral-800 bg-neutral-900 py-3">
           <button
             type="button"
-            onClick={() => setLeftPaneOpen(true)}
+            onClick={() => openPane('left')}
             className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 transition hover:bg-neutral-800 hover:text-neutral-100"
             title="Open model pane"
           >
             <PanelLeftOpen className="h-4 w-4" />
           </button>
         </div>
+      ) : null}
+
+      {isCompactLayout && (leftPaneOpen || rightPaneOpen) && (
+        <button
+          type="button"
+          onClick={() => {
+            closePane('left');
+            closePane('right');
+          }}
+          className="fixed inset-0 z-30 bg-black/60"
+          aria-label="Close side pane"
+        />
       )}
 
-      {leftPaneOpen && (
+      {!isCompactLayout && leftPaneOpen && (
         <button
           type="button"
           onMouseDown={(event) => startPaneResize('left', event)}
@@ -1237,10 +1413,13 @@ export default function App() {
           isSubmitting={isCreateTaskPending}
           latestLog={activeLog}
           sourceAsset={sourceAsset}
+          isCompactLayout={isCompactLayout}
+          onOpenModelPane={() => openPane('left')}
+          onOpenActivityPane={() => openPane('right')}
         />
       </div>
 
-      {rightPaneOpen && (
+      {!isCompactLayout && rightPaneOpen && (
         <button
           type="button"
           onMouseDown={(event) => startPaneResize('right', event)}
@@ -1254,14 +1433,16 @@ export default function App() {
       {/* Right Sidebar - Activity Log */}
       {rightPaneOpen ? (
         <div
-          className="bg-neutral-900 border-l border-neutral-800 flex flex-col shrink-0"
-          style={{ width: rightPaneWidth }}
+          className={isCompactLayout
+            ? 'fixed inset-y-0 right-0 z-40 flex shrink-0 flex-col border-l border-neutral-800 bg-neutral-900 shadow-2xl'
+            : 'flex shrink-0 flex-col border-l border-neutral-800 bg-neutral-900'}
+          style={{ width: isCompactLayout ? 'min(88vw, 360px)' : rightPaneWidth }}
         >
           <div className="p-4 border-b border-neutral-800 space-y-3">
             <div className="flex items-center justify-between gap-2">
               <button
                 type="button"
-                onClick={() => setRightPaneOpen(false)}
+                onClick={() => closePane('right')}
                 className="grid h-8 w-8 shrink-0 place-items-center rounded-md text-neutral-500 transition hover:bg-neutral-800 hover:text-neutral-100"
                 title="Collapse activity pane"
               >
@@ -1321,6 +1502,21 @@ export default function App() {
               </div>
             </div>
           </div>
+          {historySaveError && (
+            <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg border border-red-500/20 bg-red-500/10 px-3 py-2 text-xs text-red-300" role="alert">
+              <span className="min-w-0 flex-1">{historySaveError}</span>
+              <button
+                type="button"
+                onClick={() => {
+                  setHistorySaveError('');
+                  setHistoryRetryToken((value) => value + 1);
+                }}
+                className="shrink-0 font-medium text-red-200 underline underline-offset-2 hover:text-white"
+              >
+                Retry
+              </button>
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto">
             {currentProject ? (
               <ActivityLog
@@ -1331,6 +1527,7 @@ export default function App() {
                 onUseAsSource={useAsSource}
                 onGrabVideoFrame={handleGrabVideoFrame}
                 onDeleteLog={handleDeleteLog}
+                onResumeLog={resumeTask}
               />
             ) : (
               <div className="p-8 text-center text-sm text-neutral-500">
@@ -1339,11 +1536,11 @@ export default function App() {
             )}
           </div>
         </div>
-      ) : (
+      ) : !isCompactLayout ? (
         <div className="flex w-11 shrink-0 flex-col items-center border-l border-neutral-800 bg-neutral-900 py-3">
           <button
             type="button"
-            onClick={() => setRightPaneOpen(true)}
+            onClick={() => openPane('right')}
             className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 transition hover:bg-neutral-800 hover:text-neutral-100"
             title="Open activity pane"
           >
@@ -1358,7 +1555,7 @@ export default function App() {
             <Plus className="h-4 w-4" />
           </button>
         </div>
-      )}
+      ) : null}
 
       {projectDialog && (
         <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-6">

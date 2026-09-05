@@ -1534,6 +1534,7 @@ export interface GenerationLog {
   provider: string;
   prompt: string;
   status: 'generating' | 'success' | 'failed';
+  pollingState?: 'active' | 'retrying' | 'timed-out';
   taskId?: string;
   completedAt?: string;
   durationMs?: number;

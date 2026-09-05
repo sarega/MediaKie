@@ -35,6 +35,8 @@ Current version: `1.4.0`
 
    You can also enter the key inside the app settings.
 
+   The server listens on `127.0.0.1` by default. Set `HOST=0.0.0.0` only when you intentionally want to expose the app on your local network and have added appropriate access control.
+
 4. Start the app:
 
    ```bash
@@ -44,7 +46,7 @@ Current version: `1.4.0`
 5. Open the local app:
 
    ```text
-   http://localhost:3000
+   http://127.0.0.1:3000
    ```
 
 6. Choose a mode, select a model, add your prompt or media input, then generate.
@@ -54,6 +56,12 @@ Current version: `1.4.0`
 ```bash
 npm run build
 npm run start
+```
+
+Run the isolated improvement checks after a build:
+
+```bash
+npm run check:improvements
 ```
 
 ## Update log

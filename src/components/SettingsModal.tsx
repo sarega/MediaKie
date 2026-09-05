@@ -150,10 +150,11 @@ export function SettingsModal({ isOpen, autoplayVideos, theme, onClose, onSaveSe
                   value={apiKey}
                   onChange={(e) => setApiKey(e.target.value)}
                   placeholder="sk-..."
+                  autoComplete="off"
                   className="w-full bg-neutral-950 border border-neutral-700/50 rounded-xl px-4 py-3 text-sm text-neutral-100 placeholder:text-neutral-600 focus:outline-none focus:border-indigo-500 focus:ring-1 ring-indigo-500 transition-all"
                 />
                 <p className="text-xs text-neutral-500 mt-2">
-                  Stored securely in your browser's local storage. Will automatically override the server environment variable if set.
+                  Stored in this browser's local storage and readable by scripts running on this app's origin. Use <code>.env.local</code> on a trusted local machine when possible; a browser key overrides the server key.
                 </p>
               </div>
 

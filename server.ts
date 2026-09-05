@@ -1,10 +1,143 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs/promises';
+import { lookup } from 'node:dns/promises';
+import { isIP } from 'node:net';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 
 dotenv.config({ path: ['.env.local', '.env'] });
+
+const MAX_REMOTE_MEDIA_BYTES = 250 * 1024 * 1024;
+const MAX_REMOTE_REDIRECTS = 3;
+const REMOTE_FETCH_TIMEOUT_MS = 30_000;
+
+const isPrivateIpv4 = (address: string) => {
+  const octets = address.split('.').map(Number);
+  if (octets.length !== 4 || octets.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) return true;
+  const [first, second] = octets;
+  return first === 0
+    || first === 10
+    || first === 127
+    || (first === 100 && second >= 64 && second <= 127)
+    || (first === 169 && second === 254)
+    || (first === 172 && second >= 16 && second <= 31)
+    || (first === 192 && (second === 0 || second === 168))
+    || (first === 198 && (second === 18 || second === 19))
+    || first >= 224;
+};
+
+const isPrivateIpv6 = (address: string) => {
+  const normalized = address.toLowerCase().split('%')[0];
+  const mappedIpv4 = normalized.match(/(?:^|:)ffff:(\d+\.\d+\.\d+\.\d+)$/);
+  if (mappedIpv4) return isPrivateIpv4(mappedIpv4[1]);
+  if (normalized === '::' || normalized === '::1') return true;
+
+  const firstBlock = parseInt(normalized.split(':').find(Boolean) || '0', 16);
+  return normalized.startsWith('fc')
+    || normalized.startsWith('fd')
+    || (firstBlock >= 0xfe80 && firstBlock <= 0xfebf)
+    || firstBlock === 0;
+};
+
+const isPrivateAddress = (address: string) => isIP(address) === 4
+  ? isPrivateIpv4(address)
+  : isIP(address) === 6 && isPrivateIpv6(address);
+
+const assertPublicRemoteUrl = async (rawUrl: string) => {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    throw new Error('Invalid media URL');
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    throw new Error('Only HTTP and HTTPS media URLs are supported');
+  }
+
+  const hostname = parsed.hostname.toLowerCase().replace(/^\[|\]$/g, '');
+  if (!hostname || hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local')) {
+    throw new Error('Local media URLs are not allowed');
+  }
+
+  const addresses = isIP(hostname)
+    ? [hostname]
+    : (await lookup(hostname, { all: true })).map(({ address }) => address);
+  if (addresses.length === 0 || addresses.some(isPrivateAddress)) {
+    throw new Error('Private network media URLs are not allowed');
+  }
+
+  return parsed;
+};
+
+const fetchRemoteUrl = async (rawUrl: string) => {
+  let nextUrl = rawUrl;
+  for (let redirect = 0; redirect <= MAX_REMOTE_REDIRECTS; redirect += 1) {
+    const safeUrl = await assertPublicRemoteUrl(nextUrl);
+    const response = await fetch(safeUrl, {
+      redirect: 'manual',
+      signal: AbortSignal.timeout(REMOTE_FETCH_TIMEOUT_MS),
+      headers: { 'User-Agent': 'kai-media-studio/1.0', Accept: '*/*' },
+    });
+
+    if (response.status >= 300 && response.status < 400) {
+      const location = response.headers.get('location');
+      if (!location) throw new Error('Remote media redirect has no destination');
+      if (redirect === MAX_REMOTE_REDIRECTS) throw new Error('Too many remote media redirects');
+      nextUrl = new URL(location, safeUrl).toString();
+      continue;
+    }
+
+    return response;
+  }
+
+  throw new Error('Unable to fetch remote media');
+};
+
+const assertResponseSize = (response: Response) => {
+  const contentLength = Number(response.headers.get('content-length') || '');
+  if (Number.isFinite(contentLength) && contentLength > MAX_REMOTE_MEDIA_BYTES) {
+    throw new Error('Remote media is too large');
+  }
+};
+
+const readResponseBuffer = async (response: Response) => {
+  assertResponseSize(response);
+  if (!response.body) {
+    const buffer = Buffer.from(await response.arrayBuffer());
+    if (buffer.length > MAX_REMOTE_MEDIA_BYTES) throw new Error('Remote media is too large');
+    return buffer;
+  }
+
+  const chunks: Buffer[] = [];
+  let total = 0;
+  for await (const chunk of response.body as any) {
+    const buffer = Buffer.from(chunk);
+    total += buffer.length;
+    if (total > MAX_REMOTE_MEDIA_BYTES) throw new Error('Remote media is too large');
+    chunks.push(buffer);
+  }
+  return Buffer.concat(chunks);
+};
+
+const getRemoteMediaError = (error: unknown, fallback: string) => {
+  const message = error instanceof Error ? error.message : '';
+  if (message === 'Remote media is too large') return { status: 413, message };
+  if (message.includes('media URL') || message.includes('redirect') || message.includes('data URL')) return { status: 400, message };
+  return { status: 500, message: fallback };
+};
+
+const decodeBase64DataUrl = (rawUrl: string) => {
+  const matches = rawUrl.match(/^data:([^;]+);base64,(.+)$/);
+  if (!matches || !/^[A-Za-z0-9+/]*={0,2}$/.test(matches[2]) || matches[2].length % 4 === 1) {
+    throw new Error('Invalid data URL format');
+  }
+
+  const buffer = Buffer.from(matches[2], 'base64');
+  if (buffer.length > MAX_REMOTE_MEDIA_BYTES) throw new Error('Remote media is too large');
+  return { contentType: matches[1], buffer };
+};
 
 const getExtensionFromContentType = (contentType: string | null, fallbackType?: string) => {
   if (contentType?.includes('image/png')) return 'png';
@@ -132,13 +265,37 @@ async function startServer() {
     }
   };
 
-  const writeHistory = async (projectId: string, logs: unknown[]) => {
+  const historyWriteQueues = new Map<string, Promise<unknown>>();
+
+  const withHistoryWrite = async <T>(projectId: string, task: () => Promise<T>) => {
+    const previous = historyWriteQueues.get(projectId) || Promise.resolve();
+    const current = previous.catch(() => {}).then(task);
+    historyWriteQueues.set(projectId, current);
+    try {
+      return await current;
+    } finally {
+      if (historyWriteQueues.get(projectId) === current) historyWriteQueues.delete(projectId);
+    }
+  };
+
+  const writeHistoryFile = async (projectId: string, logs: unknown[]) => {
     await ensureProject(projectId);
-    await fs.writeFile(getProjectHistoryPath(projectId), JSON.stringify({ logs }, null, 2));
+    const historyPath = getProjectHistoryPath(projectId);
+    const tempPath = `${historyPath}.${crypto.randomUUID()}.tmp`;
+    try {
+      await fs.writeFile(tempPath, JSON.stringify({ logs }, null, 2));
+      await fs.rename(tempPath, historyPath);
+    } finally {
+      await fs.unlink(tempPath).catch(() => {});
+    }
     const meta = await readJson(getProjectMetaPath(projectId), null);
     if (meta?.id) {
       await fs.writeFile(getProjectMetaPath(projectId), JSON.stringify({ ...meta, updatedAt: new Date().toISOString() }, null, 2));
     }
+  };
+
+  const writeHistory = (projectId: string, logs: unknown[]) => {
+    return withHistoryWrite(projectId, () => writeHistoryFile(projectId, logs));
   };
 
   const listProjects = async () => {
@@ -166,6 +323,25 @@ async function startServer() {
 
   const libraryUrlFor = (projectId: string, filename: string) => {
     return projectId === defaultProjectId ? `/library/${filename}` : `/projects/${projectId}/library/${filename}`;
+  };
+
+  const mediaUrlsFromLog = (log: any) => {
+    const urls = Array.isArray(log?.mediaUrls) ? log.mediaUrls : [log?.mediaUrl].filter(Boolean);
+    return urls.filter((url: unknown): url is string => typeof url === 'string');
+  };
+
+  const removeUnreferencedMedia = async (projectId: string, removedLogs: any[], remainingLogs: any[]) => {
+    const remainingUrls = new Set(remainingLogs.flatMap(mediaUrlsFromLog));
+    for (const log of removedLogs) {
+      for (const mediaUrl of mediaUrlsFromLog(log)) {
+        if (remainingUrls.has(mediaUrl)) continue;
+        const filePath = resolveLibraryFile(mediaUrl, projectId);
+        if (!filePath) continue;
+        const relativePath = path.relative(getProjectLibraryDir(projectId), filePath);
+        if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) continue;
+        await fs.unlink(filePath).catch(() => {});
+      }
+    }
   };
 
   app.get('/api/projects', async (_req, res) => {
@@ -205,22 +381,37 @@ async function startServer() {
     res.json({ ok: true });
   });
 
+  app.put('/api/projects/:projectId/history/:id', async (req, res) => {
+    const projectId = safeProjectId(req.params.projectId);
+    const logId = typeof req.params.id === 'string' ? req.params.id : '';
+    const log = req.body?.log;
+    if (!projectId) return res.status(400).json({ error: 'Invalid project id' });
+    if (!logId || logId.length > 200) return res.status(400).json({ error: 'Invalid history id' });
+    if (!log || typeof log !== 'object' || Array.isArray(log) || log.id !== logId) {
+      return res.status(400).json({ error: 'A matching history log is required' });
+    }
+
+    await withHistoryWrite(projectId, async () => {
+      const logs = await readHistory(projectId);
+      const index = logs.findIndex((item: any) => item?.id === logId);
+      const nextLogs = index === -1
+        ? [log, ...logs]
+        : logs.map((item: any, itemIndex: number) => itemIndex === index ? log : item);
+      await writeHistoryFile(projectId, nextLogs);
+    });
+
+    res.json({ ok: true });
+  });
+
   app.delete('/api/projects/:projectId/history', async (req, res) => {
     const projectId = safeProjectId(req.params.projectId);
     if (!projectId) return res.status(400).json({ error: 'Invalid project id' });
 
-    const logs = await readHistory(projectId);
-    for (const log of logs) {
-      const urls = Array.isArray(log.mediaUrls) ? log.mediaUrls : [log.mediaUrl].filter(Boolean);
-      for (const mediaUrl of urls) {
-        if (typeof mediaUrl === 'string') {
-          const filePath = resolveLibraryFile(mediaUrl, projectId);
-          if (filePath) await fs.unlink(filePath).catch(() => {});
-        }
-      }
-    }
-
-    await writeHistory(projectId, []);
+    await withHistoryWrite(projectId, async () => {
+      const currentLogs = await readHistory(projectId);
+      await removeUnreferencedMedia(projectId, currentLogs, []);
+      await writeHistoryFile(projectId, []);
+    });
     res.json({ logs: [] });
   });
 
@@ -228,21 +419,14 @@ async function startServer() {
     const projectId = safeProjectId(req.params.projectId);
     if (!projectId) return res.status(400).json({ error: 'Invalid project id' });
 
-    const logs = await readHistory(projectId);
-    const removed = logs.filter((log: any) => log.id === req.params.id);
-    const nextLogs = logs.filter((log: any) => log.id !== req.params.id);
-
-    for (const log of removed) {
-      const urls = Array.isArray(log.mediaUrls) ? log.mediaUrls : [log.mediaUrl].filter(Boolean);
-      for (const mediaUrl of urls) {
-        if (typeof mediaUrl === 'string') {
-          const filePath = resolveLibraryFile(mediaUrl, projectId);
-          if (filePath) await fs.unlink(filePath).catch(() => {});
-        }
-      }
-    }
-
-    await writeHistory(projectId, nextLogs);
+    const nextLogs = await withHistoryWrite(projectId, async () => {
+      const logs = await readHistory(projectId);
+      const removed = logs.filter((log: any) => log.id === req.params.id);
+      const nextLogs = logs.filter((log: any) => log.id !== req.params.id);
+      await removeUnreferencedMedia(projectId, removed, nextLogs);
+      await writeHistoryFile(projectId, nextLogs);
+      return nextLogs;
+    });
     res.json({ logs: nextLogs });
   });
 
@@ -260,7 +444,7 @@ async function startServer() {
         return res.json({ url });
       }
 
-      const response = await fetch(url);
+      const response = await fetchRemoteUrl(url);
       if (!response.ok) {
         return res.status(response.status).json({ error: `Failed to fetch media: ${response.statusText}` });
       }
@@ -269,13 +453,14 @@ async function startServer() {
       const urlExt = getExtensionFromUrl(url, type);
       const ext = urlExt || getExtensionFromContentType(contentType, type);
       const filename = `${Date.now()}-${crypto.randomUUID()}.${ext}`;
-      const buffer = Buffer.from(await response.arrayBuffer());
+      const buffer = await readResponseBuffer(response);
       await fs.writeFile(path.join(getProjectLibraryDir(projectId), filename), buffer);
 
       res.json({ url: libraryUrlFor(projectId, filename) });
     } catch (error) {
       console.error('Project library save error:', error);
-      res.status(500).json({ error: 'Failed to save media locally' });
+      const response = getRemoteMediaError(error, 'Failed to save media locally');
+      res.status(response.status).json({ error: response.message });
     }
   });
 
@@ -290,21 +475,14 @@ async function startServer() {
   });
 
   app.delete('/api/history/:id', async (req, res) => {
-    const logs = await readHistory(defaultProjectId);
-    const removed = logs.filter((log: any) => log.id === req.params.id);
-    const nextLogs = logs.filter((log: any) => log.id !== req.params.id);
-
-    for (const log of removed) {
-      const urls = Array.isArray(log.mediaUrls) ? log.mediaUrls : [log.mediaUrl].filter(Boolean);
-      for (const mediaUrl of urls) {
-        if (typeof mediaUrl === 'string') {
-          const filePath = resolveLibraryFile(mediaUrl, defaultProjectId);
-          if (filePath) await fs.unlink(filePath).catch(() => {});
-        }
-      }
-    }
-
-    await writeHistory(defaultProjectId, nextLogs);
+    const nextLogs = await withHistoryWrite(defaultProjectId, async () => {
+      const logs = await readHistory(defaultProjectId);
+      const removed = logs.filter((log: any) => log.id === req.params.id);
+      const nextLogs = logs.filter((log: any) => log.id !== req.params.id);
+      await removeUnreferencedMedia(defaultProjectId, removed, nextLogs);
+      await writeHistoryFile(defaultProjectId, nextLogs);
+      return nextLogs;
+    });
     res.json({ logs: nextLogs });
   });
 
@@ -318,7 +496,7 @@ async function startServer() {
         return res.json({ url });
       }
 
-      const response = await fetch(url);
+      const response = await fetchRemoteUrl(url);
       if (!response.ok) {
         return res.status(response.status).json({ error: `Failed to fetch media: ${response.statusText}` });
       }
@@ -327,13 +505,14 @@ async function startServer() {
       const urlExt = getExtensionFromUrl(url, type);
       const ext = urlExt || getExtensionFromContentType(contentType, type);
       const filename = `${Date.now()}-${crypto.randomUUID()}.${ext}`;
-      const buffer = Buffer.from(await response.arrayBuffer());
+      const buffer = await readResponseBuffer(response);
       await fs.writeFile(path.join(getProjectLibraryDir(defaultProjectId), filename), buffer);
 
       res.json({ url: `/library/${filename}` });
     } catch (error) {
       console.error('Library save error:', error);
-      res.status(500).json({ error: 'Failed to save media locally' });
+      const response = getRemoteMediaError(error, 'Failed to save media locally');
+      res.status(response.status).json({ error: response.message });
     }
   });
 
@@ -369,28 +548,21 @@ async function startServer() {
       }
 
       if (targetUrl.startsWith('data:')) {
-        const matches = targetUrl.match(/^data:([^;]+);base64,(.+)$/);
-        if (!matches) {
-          return res.status(400).send('Invalid data URL format');
-        }
-        res.setHeader('Content-Type', matches[1]);
-        return res.send(Buffer.from(matches[2], 'base64'));
+        const { contentType, buffer } = decodeBase64DataUrl(targetUrl);
+        res.setHeader('Content-Type', contentType);
+        return res.send(buffer);
       }
 
       const absoluteTargetUrl = targetUrl.startsWith('/')
         ? new URL(targetUrl, `${req.protocol}://${req.get('host')}`).toString()
         : targetUrl;
 
-      const response = await fetch(absoluteTargetUrl, {
-        headers: {
-          'User-Agent': 'kai-media-studio/1.0',
-          'Accept': '*/*',
-        },
-      });
+      const response = await fetchRemoteUrl(absoluteTargetUrl);
       if (!response.ok) {
         return res.status(response.status).send(`Failed to fetch file: ${response.statusText}`);
       }
 
+      assertResponseSize(response);
       const contentType = response.headers.get('content-type');
       if (contentType) {
         res.setHeader('Content-Type', contentType);
@@ -398,23 +570,32 @@ async function startServer() {
 
       // Stream the response to the client
       if (response.body) {
+        let bytesSent = 0;
         (async () => {
           try {
              // using web streams properly in node 18+
              for await (const chunk of response.body as any) {
-               res.write(chunk);
+               const buffer = Buffer.from(chunk);
+               bytesSent += buffer.length;
+               if (bytesSent > MAX_REMOTE_MEDIA_BYTES) {
+                 res.destroy(new Error('Remote media is too large'));
+                 return;
+               }
+               res.write(buffer);
              }
              res.end();
           } catch(e) {
-             res.end();
+             if (!res.destroyed) res.destroy(e as Error);
           }
         })();
       } else {
-        res.end();
+        const buffer = await readResponseBuffer(response);
+        res.send(buffer);
       }
     } catch (error) {
       console.error('Download error:', error);
-      res.status(500).send('Failed to download file');
+      const response = getRemoteMediaError(error, 'Failed to download file');
+      if (!res.headersSent) res.status(response.status).send(response.message);
     }
   });
 
@@ -553,8 +734,12 @@ async function startServer() {
     });
   }
 
-  app.listen(PORT, '0.0.0.0', () => {
-    console.log(`Server running on http://0.0.0.0:${PORT}`);
+  const HOST = process.env.HOST || '127.0.0.1';
+  if (!['127.0.0.1', 'localhost', '::1'].includes(HOST)) {
+    console.warn(`Server is listening on ${HOST}; this exposes local project and proxy routes beyond this machine.`);
+  }
+  app.listen(PORT, HOST, () => {
+    console.log(`Server running on http://${HOST}:${PORT}`);
   });
 }
 

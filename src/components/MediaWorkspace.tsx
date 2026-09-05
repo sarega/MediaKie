@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { AIModel, GenerationLog, ModelParamConfig, estimateModelCredits } from '../types';
-import { Sparkles, Upload, Download, Loader2, Settings2, Wallet, Link2, Copy, Search, Check, Film, Scissors, Play, Pause, Trash2, StepBack, StepForward } from 'lucide-react';
+import { Sparkles, Upload, Download, Loader2, Settings2, Wallet, Link2, Copy, Search, Check, Film, Scissors, Play, Pause, Trash2, StepBack, StepForward, PanelLeftOpen, PanelRightOpen } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { ClypraEditorHost } from './ClypraEditorHost';
@@ -14,6 +14,9 @@ interface Props {
   isSubmitting: boolean;
   latestLog?: GenerationLog;
   sourceAsset?: { id: string; type: 'image' | 'video'; url: string; label?: string } | null;
+  isCompactLayout?: boolean;
+  onOpenModelPane?: () => void;
+  onOpenActivityPane?: () => void;
 }
 
 type EditorClip = {
@@ -42,7 +45,7 @@ const previewJsonValue = (value: any): any => {
   return value;
 };
 
-export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSubmitting, latestLog, sourceAsset }: Props) {
+export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSubmitting, latestLog, sourceAsset, isCompactLayout = false, onOpenModelPane, onOpenActivityPane }: Props) {
   const [workspaceMode, setWorkspaceMode] = useState<'create' | 'edit'>('create');
   const [prompt, setPrompt] = useState('');
   
@@ -61,6 +64,15 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
   const [isPreviewingTimeline, setIsPreviewingTimeline] = useState(false);
   const [previewClipIndex, setPreviewClipIndex] = useState(0);
   const [exportStatus, setExportStatus] = useState('');
+
+  useEffect(() => {
+    if (!isCompactLayout || !showSettings) return;
+    const closeSettingsOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setShowSettings(false);
+    };
+    window.addEventListener('keydown', closeSettingsOnEscape);
+    return () => window.removeEventListener('keydown', closeSettingsOnEscape);
+  }, [isCompactLayout, showSettings]);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
@@ -585,7 +597,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
       }}
       onDrop={handleEditorDrop}
     >
-      <div className="grid min-h-0 flex-1 grid-cols-[minmax(0,1fr)_240px]">
+      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_240px]">
         <div className="flex min-w-0 flex-col">
           <div className="flex-1 min-h-0 p-6">
             <div className="relative flex h-full items-center justify-center overflow-hidden rounded-lg border border-neutral-800 bg-black">
@@ -761,18 +773,42 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
     <div className="flex flex-col h-full bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-neutral-900 to-neutral-950">
       
       {/* Header */}
-      <div className="flex shrink-0 items-center justify-between border-b border-neutral-800/50 px-6 py-4 z-10">
-        <div>
-          <h2 className="text-2xl font-semibold tracking-tight text-neutral-100 mb-1">
+      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-800/50 px-4 py-3 sm:px-6 sm:py-4 z-10">
+        <div className="flex min-w-0 items-start gap-2">
+          {isCompactLayout && (
+            <div className="flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                onClick={onOpenModelPane}
+                className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 transition hover:bg-neutral-800 hover:text-neutral-100"
+                title="Open model pane"
+                aria-label="Open model pane"
+              >
+                <PanelLeftOpen className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={onOpenActivityPane}
+                className="grid h-8 w-8 place-items-center rounded-md text-neutral-500 transition hover:bg-neutral-800 hover:text-neutral-100"
+                title="Open activity pane"
+                aria-label="Open activity pane"
+              >
+                <PanelRightOpen className="h-4 w-4" />
+              </button>
+            </div>
+          )}
+          <div className="min-w-0">
+          <h2 className="mb-1 max-w-[48vw] text-xl font-semibold tracking-tight text-neutral-100 sm:max-w-none sm:text-2xl">
             {workspaceMode === 'edit' ? (USE_CLYPRA_EDITOR ? 'Clypra Editor' : 'Video Editor') : selectedModel.name}
           </h2>
-          <p className="text-neutral-400 font-mono text-xs">
+          <p className="hidden text-neutral-400 font-mono text-xs sm:block">
             {workspaceMode === 'edit'
               ? USE_CLYPRA_EDITOR
                 ? 'Experimental Clypra adapter mount'
                 : 'Assemble, trim, split, and export generated clips'
               : `Powered by ${selectedModel.provider} • ${selectedModel.category.replace(/-/g, ' ')}`}
           </p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           {workspaceMode === 'create' && selectedModel.params && selectedModel.params.length > 0 && (
@@ -839,13 +875,27 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
         {/* Settings Panel (collapsible from right) */}
         <AnimatePresence>
           {workspaceMode === 'create' && showSettings && selectedModel.params && (
-            <motion.div
-              initial={{ width: 0, opacity: 0 }}
-              animate={{ width: 300, opacity: 1 }}
-              exit={{ width: 0, opacity: 0 }}
-              className="flex h-full min-h-0 shrink-0 flex-col overflow-hidden border-l border-neutral-800/80 bg-neutral-900/60 backdrop-blur"
-            >
-              <div className="flex h-full min-h-0 w-[300px] flex-col p-4">
+            <>
+              {isCompactLayout && (
+                <button
+                  type="button"
+                  onClick={() => setShowSettings(false)}
+                  className="absolute inset-0 z-10 bg-black/50"
+                  aria-label="Close model parameters"
+                />
+              )}
+              <motion.div
+                initial={{ width: 0, opacity: 0 }}
+                animate={{ width: isCompactLayout ? 'min(88vw, 360px)' : 300, opacity: 1 }}
+                exit={{ width: 0, opacity: 0 }}
+                className={cn(
+                  'flex h-full min-h-0 flex-col overflow-hidden border-l border-neutral-800/80 bg-neutral-900/90 backdrop-blur',
+                  isCompactLayout ? 'absolute inset-y-0 right-0 z-20 shadow-2xl' : 'relative shrink-0 bg-neutral-900/60'
+                )}
+              >
+              <div
+                className={cn('flex h-full min-h-0 flex-col p-4', isCompactLayout ? 'w-full' : 'w-[300px]')}
+              >
                 <div className="mb-4 flex shrink-0 items-center justify-between gap-3">
                   <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-400">Model Parameters</h3>
                   <div className="grid grid-cols-2 gap-1 rounded-md border border-neutral-800 bg-neutral-950 p-1">
@@ -1115,7 +1165,8 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
                   </div>
                 )}
               </div>
-            </motion.div>
+              </motion.div>
+            </>
           )}
         </AnimatePresence>
 

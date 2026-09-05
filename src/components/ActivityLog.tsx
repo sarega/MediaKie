@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { GenerationLog } from '../types';
 import { formatDistanceToNow } from 'date-fns';
 import { AlertCircle, Clock, CheckCircle2, Copy, ExternalLink, ImagePlus, Trash2, ScanLine } from 'lucide-react';
@@ -11,6 +11,53 @@ interface Props {
   onUseAsSource: (asset: { type: 'image' | 'video'; url: string; label?: string }) => void;
   onGrabVideoFrame: (url: string) => void;
   onDeleteLog: (id: string) => void;
+  onResumeLog: (id: string) => void;
+}
+
+const HISTORY_PAGE_SIZE = 30;
+
+function MediaPreview({ url, type, alt, autoplay }: { url: string; type: 'image' | 'video'; alt: string; autoplay: boolean }) {
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const [isVisible, setIsVisible] = useState(false);
+
+  useEffect(() => {
+    if (type !== 'video') return;
+    const video = videoRef.current;
+    if (!video) return;
+    if (typeof IntersectionObserver === 'undefined') {
+      setIsVisible(true);
+      return;
+    }
+
+    const observer = new IntersectionObserver(([entry]) => setIsVisible(entry.isIntersecting), { rootMargin: '120px' });
+    observer.observe(video);
+    return () => observer.disconnect();
+  }, [autoplay, type]);
+
+  useEffect(() => {
+    const video = videoRef.current;
+    if (!video || !autoplay) return;
+    if (isVisible) void video.play().catch(() => {});
+    else video.pause();
+  }, [autoplay, isVisible]);
+
+  if (type === 'video') {
+    return (
+      <video
+        ref={videoRef}
+        src={url}
+        className="w-full h-auto max-h-32 object-cover"
+        muted
+        loop
+        controls
+        autoPlay={autoplay && isVisible}
+        preload={isVisible ? 'metadata' : 'none'}
+        playsInline
+      />
+    );
+  }
+
+  return <img src={url} alt={alt} loading="lazy" className="w-full h-auto max-h-32 object-cover" />;
 }
 
 const formatDuration = (ms: number) => {
@@ -22,14 +69,19 @@ const formatDuration = (ms: number) => {
   return `${remainingSeconds}s`;
 };
 
-export function ActivityLog({ logs, activeLogId, autoplayVideos, onSelectLog, onUseAsSource, onGrabVideoFrame, onDeleteLog }: Props) {
+export function ActivityLog({ logs, activeLogId, autoplayVideos, onSelectLog, onUseAsSource, onGrabVideoFrame, onDeleteLog, onResumeLog }: Props) {
   const [now, setNow] = useState(Date.now());
+  const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE);
 
   useEffect(() => {
     if (!logs.some((log) => log.status === 'generating')) return;
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
   }, [logs]);
+
+  useEffect(() => {
+    setVisibleCount(HISTORY_PAGE_SIZE);
+  }, [logs.length]);
 
   if (logs.length === 0) {
     return (
@@ -41,7 +93,7 @@ export function ActivityLog({ logs, activeLogId, autoplayVideos, onSelectLog, on
 
   return (
     <div className="flex flex-col divide-y divide-neutral-800/50">
-      {logs.map((log) => {
+      {logs.slice(0, visibleCount).map((log) => {
         const isSourceMedia = log.type === 'image' || log.type === 'video';
 
         return (
@@ -49,14 +101,19 @@ export function ActivityLog({ logs, activeLogId, autoplayVideos, onSelectLog, on
           key={log.id}
           role="button"
           tabIndex={0}
-          onClick={() => onSelectLog(log.id)}
+          aria-label={`Select ${log.modelName} history item`}
+          onClick={(event) => {
+            if ((event.target as HTMLElement).closest('button, a')) return;
+            onSelectLog(log.id);
+          }}
           onKeyDown={(event) => {
+            if ((event.target as HTMLElement).closest('button, a')) return;
             if (event.key === 'Enter' || event.key === ' ') {
               event.preventDefault();
               onSelectLog(log.id);
             }
           }}
-          className={`p-4 flex flex-col gap-2 cursor-pointer transition-colors ${log.id === activeLogId ? 'bg-indigo-500/10 ring-1 ring-inset ring-indigo-500/40' : 'hover:bg-neutral-800/30'}`}
+          className={`p-4 flex flex-col gap-2 cursor-pointer transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-indigo-500/70 ${log.id === activeLogId ? 'bg-indigo-500/10 ring-1 ring-inset ring-indigo-500/40' : 'hover:bg-neutral-800/30'}`}
         >
           <div className="flex items-center justify-between gap-2">
             <div className="flex items-center gap-2">
@@ -69,12 +126,15 @@ export function ActivityLog({ logs, activeLogId, autoplayVideos, onSelectLog, on
             </div>
             <div className="flex items-center gap-2">
               {log.status === 'success' && <CheckCircle2 className="w-4 h-4 text-green-500" />}
-              {log.status === 'generating' && <Clock className="w-4 h-4 text-amber-500 animate-pulse" />}
+              {log.status === 'generating' && (log.pollingState === 'retrying' || log.pollingState === 'timed-out') && <AlertCircle className="w-4 h-4 text-amber-400" />}
+              {log.status === 'generating' && (!log.pollingState || log.pollingState === 'active') && <Clock className="w-4 h-4 text-amber-500 animate-pulse" />}
               {log.status === 'failed' && <AlertCircle className="w-4 h-4 text-red-500" />}
               <button
+                type="button"
                 onClick={() => onDeleteLog(log.id)}
                 className="p-1 rounded-md text-neutral-500 hover:text-red-300 hover:bg-red-500/10 transition-colors"
-                title="Remove from history"
+                title="Remove history item and saved local media"
+                aria-label="Remove history item and saved local media"
               >
                 <Trash2 className="w-3.5 h-3.5" />
               </button>
@@ -92,6 +152,22 @@ export function ActivityLog({ logs, activeLogId, autoplayVideos, onSelectLog, on
                 ? formatDuration(log.durationMs)
                 : '-'}
           </div>
+
+          {log.status === 'generating' && log.pollingState && log.pollingState !== 'active' && (
+            <div className="flex items-start gap-2 rounded-md bg-amber-400/10 p-2 text-xs text-amber-300" role="status">
+              <span className="min-w-0 flex-1">{log.error || 'Task status needs attention.'}</span>
+              <button
+                type="button"
+                onClick={(event) => {
+                  event.stopPropagation();
+                  onResumeLog(log.id);
+                }}
+                className="shrink-0 font-medium underline underline-offset-2 hover:text-white"
+              >
+                Check status
+              </button>
+            </div>
+          )}
 
           {log.status === 'failed' && log.error && (
             <div className="text-xs text-red-400 bg-red-400/10 p-2 rounded-md">
@@ -113,14 +189,11 @@ export function ActivityLog({ logs, activeLogId, autoplayVideos, onSelectLog, on
                     }}
                     className="relative rounded-md overflow-hidden bg-neutral-900 border border-neutral-800 flex-1 min-w-[45%] group/media"
                   >
-                     {log.type === 'video' ? (
-                       <video src={url} className="w-full h-auto max-h-32 object-cover" muted loop controls autoPlay={autoplayVideos} playsInline />
-                     ) : (
-                       <img src={url} alt={log.prompt} className="w-full h-auto max-h-32 object-cover" />
-                     )}
-                    <div className="absolute inset-x-1 bottom-1 flex justify-center gap-1 opacity-0 group-hover/media:opacity-100 transition-opacity">
+                     <MediaPreview url={url} type={log.type === 'video' ? 'video' : 'image'} alt={log.prompt} autoplay={autoplayVideos} />
+                    <div className="absolute inset-x-1 bottom-1 flex justify-center gap-1 opacity-0 transition-opacity group-hover/media:opacity-100 group-focus-within/media:opacity-100">
                       {isSourceMedia && (
                         <button
+                          type="button"
                           onClick={() => {
                             if (log.type === 'image' || log.type === 'video') {
                               onUseAsSource({ type: log.type, url, label: log.modelName });
@@ -128,15 +201,18 @@ export function ActivityLog({ logs, activeLogId, autoplayVideos, onSelectLog, on
                           }}
                           className="h-7 w-7 rounded-md bg-neutral-950/90 border border-white/10 text-white grid place-items-center hover:bg-neutral-800"
                           title="Use as source"
+                          aria-label="Use as source"
                         >
                           <ImagePlus className="w-3.5 h-3.5" />
                         </button>
                       )}
                       {log.type === 'video' && (
                         <button
+                          type="button"
                           onClick={() => onGrabVideoFrame(url)}
                           className="h-7 w-7 rounded-md bg-neutral-950/90 border border-white/10 text-white grid place-items-center hover:bg-neutral-800"
                           title="Grab frame as source image"
+                          aria-label="Grab frame as source image"
                         >
                           <ScanLine className="w-3.5 h-3.5" />
                         </button>
@@ -145,8 +221,10 @@ export function ActivityLog({ logs, activeLogId, autoplayVideos, onSelectLog, on
                         href={url}
                         target="_blank"
                         rel="noreferrer"
+                        onClick={(event) => event.stopPropagation()}
                         className="h-7 w-7 rounded-md bg-neutral-950/90 border border-white/10 text-white grid place-items-center hover:bg-neutral-800"
                         title="Open media"
+                        aria-label="Open media"
                       >
                         <ExternalLink className="w-3.5 h-3.5" />
                       </a>
@@ -162,9 +240,11 @@ export function ActivityLog({ logs, activeLogId, autoplayVideos, onSelectLog, on
               <div className="mb-2 flex items-center justify-between gap-2">
                 <span className="text-[11px] uppercase tracking-wider text-neutral-500">Generated ID</span>
                 <button
+                  type="button"
                   onClick={() => navigator.clipboard?.writeText(log.textResult || '')}
                   className="grid h-7 w-7 place-items-center rounded-md text-neutral-500 hover:bg-neutral-800 hover:text-neutral-100"
                   title="Copy result"
+                  aria-label="Copy result"
                 >
                   <Copy className="h-3.5 w-3.5" />
                 </button>
@@ -177,6 +257,15 @@ export function ActivityLog({ logs, activeLogId, autoplayVideos, onSelectLog, on
         </div>
         );
       })}
+      {visibleCount < logs.length && (
+        <button
+          type="button"
+          onClick={() => setVisibleCount((count) => Math.min(logs.length, count + HISTORY_PAGE_SIZE))}
+          className="mx-4 my-3 rounded-md border border-neutral-800 px-3 py-2 text-xs font-medium text-neutral-400 transition hover:bg-neutral-800 hover:text-neutral-100"
+        >
+          Load older history ({logs.length - visibleCount})
+        </button>
+      )}
     </div>
   );
 }

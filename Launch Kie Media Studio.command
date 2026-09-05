@@ -20,7 +20,7 @@ while lsof -iTCP:"$PORT" -sTCP:LISTEN -t >/dev/null 2>&1; do
   PORT=$((PORT + 1))
 done
 
-URL="http://localhost:$PORT"
+URL="http://127.0.0.1:$PORT"
 
 echo "Starting Media Studio..."
 echo "URL: $URL"

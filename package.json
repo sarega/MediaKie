@@ -10,6 +10,8 @@
     "preview": "vite preview",
     "clean": "rm -rf dist server.js",
     "lint": "tsc --noEmit",
+    "check:improvements": "npm run build && node scripts/check-improvements.mjs && npm run check:polling",
+    "check:polling": "tsx scripts/check-kie-polling.ts",
     "check:credits": "tsx scripts/verify-credit-estimates.ts",
     "check:catalog": "tsx scripts/check-kie-catalog.ts"
   },
