@@ -619,6 +619,20 @@ export default function App() {
     setFrameGrabber({ url, time: 0, duration: 0 });
   };
 
+  const handleRevealFile = async (url: string) => {
+    try {
+      const res = await fetch(projectApiUrl('/api/reveal-file'), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, projectId: currentProjectId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Unable to reveal file in Finder.');
+    } catch (error: any) {
+      alert(error.message || 'Unable to reveal file in Finder.');
+    }
+  };
+
   const captureFrameAtTime = async () => {
     if (!frameGrabber || !frameVideoRef.current) return;
     const video = frameVideoRef.current;
@@ -1416,6 +1430,7 @@ export default function App() {
           isCompactLayout={isCompactLayout}
           onOpenModelPane={() => openPane('left')}
           onOpenActivityPane={() => openPane('right')}
+          onRevealFile={handleRevealFile}
         />
       </div>
 
@@ -1526,6 +1541,7 @@ export default function App() {
                 onSelectLog={setActiveLogId}
                 onUseAsSource={useAsSource}
                 onGrabVideoFrame={handleGrabVideoFrame}
+                onRevealFile={handleRevealFile}
                 onDeleteLog={handleDeleteLog}
                 onResumeLog={resumeTask}
               />

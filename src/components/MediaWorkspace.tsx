@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { AIModel, GenerationLog, ModelParamConfig, estimateModelCredits } from '../types';
-import { Sparkles, Upload, Download, Loader2, Settings2, Wallet, Link2, Copy, Search, Check, Film, Scissors, Play, Pause, Trash2, StepBack, StepForward, PanelLeftOpen, PanelRightOpen } from 'lucide-react';
+import { Sparkles, Upload, Download, FolderOpen, Loader2, Settings2, Wallet, Link2, Copy, Search, Check, Film, Scissors, Play, Pause, Trash2, StepBack, StepForward, PanelLeftOpen, PanelRightOpen } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import { ClypraEditorHost } from './ClypraEditorHost';
@@ -17,6 +17,7 @@ interface Props {
   isCompactLayout?: boolean;
   onOpenModelPane?: () => void;
   onOpenActivityPane?: () => void;
+  onRevealFile?: (url: string) => void;
 }
 
 type EditorClip = {
@@ -45,7 +46,9 @@ const previewJsonValue = (value: any): any => {
   return value;
 };
 
-export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSubmitting, latestLog, sourceAsset, isCompactLayout = false, onOpenModelPane, onOpenActivityPane }: Props) {
+const isLocalLibraryUrl = (url: string) => url.startsWith('/library/') || url.startsWith('/projects/');
+
+export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSubmitting, latestLog, sourceAsset, isCompactLayout = false, onOpenModelPane, onOpenActivityPane, onRevealFile }: Props) {
   const [workspaceMode, setWorkspaceMode] = useState<'create' | 'edit'>('create');
   const [prompt, setPrompt] = useState('');
   
@@ -541,11 +544,24 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
                   />
                 )}
                 
-                <div className="absolute top-4 right-4 opacity-0 group-hover/item:opacity-100 transition-opacity">
+                <div className="absolute top-4 right-4 flex gap-2 opacity-100 transition-opacity md:opacity-0 md:group-hover/item:opacity-100 group-focus-within/item:opacity-100">
+                  {onRevealFile && isLocalLibraryUrl(url) && (
+                    <button
+                      type="button"
+                      onClick={() => onRevealFile(url)}
+                      className="flex items-center gap-2 rounded-full border border-white/10 bg-neutral-900/90 p-3 text-white shadow backdrop-blur transition-colors hover:bg-neutral-800"
+                      title="Reveal file in Finder"
+                      aria-label="Reveal file in Finder"
+                    >
+                      <FolderOpen className="h-4 w-4" />
+                    </button>
+                  )}
                   <button
+                    type="button"
                     onClick={() => downloadMedia(url, `generated-${latestLog.type}-${Date.now()}-${idx}`)}
-                    className="flex items-center gap-2 bg-neutral-900/90 hover:bg-neutral-800 text-white p-3 rounded-full backdrop-blur shadow border border-white/10 transition-colors"
+                    className="flex items-center gap-2 rounded-full border border-white/10 bg-neutral-900/90 p-3 text-white shadow backdrop-blur transition-colors hover:bg-neutral-800"
                     title="Download"
+                    aria-label="Download"
                   >
                     <Download className="w-4 h-4" />
                   </button>

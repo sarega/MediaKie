@@ -122,6 +122,18 @@ try {
   const malformedDataUrl = await request('/api/download?url=data%3Aimage%2Fpng%3Bbase64%2Anot-base64');
   assert.equal(malformedDataUrl.response.status, 400);
 
+  const revealRemote = await request('/api/reveal-file', jsonOptions('POST', {
+    url: `${baseUrl}/private-fixture.png`,
+    projectId,
+  }));
+  assert.equal(revealRemote.response.status, 400);
+
+  const revealDirectory = await request('/api/reveal-file', jsonOptions('POST', {
+    url: `/projects/${projectId}/library/`,
+    projectId,
+  }));
+  assert.equal(revealDirectory.response.status, 400);
+
   console.log('check:improvements passed');
 } finally {
   server.kill('SIGTERM');

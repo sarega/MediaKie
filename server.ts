@@ -1,8 +1,10 @@
 import express from 'express';
 import path from 'path';
 import fs from 'fs/promises';
+import { execFile } from 'node:child_process';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
+import { promisify } from 'node:util';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 
@@ -11,6 +13,7 @@ dotenv.config({ path: ['.env.local', '.env'] });
 const MAX_REMOTE_MEDIA_BYTES = 250 * 1024 * 1024;
 const MAX_REMOTE_REDIRECTS = 3;
 const REMOTE_FETCH_TIMEOUT_MS = 30_000;
+const execFileAsync = promisify(execFile);
 
 const isPrivateIpv4 = (address: string) => {
   const octets = address.split('.').map(Number);
@@ -321,6 +324,20 @@ async function startServer() {
     return null;
   };
 
+  const resolveLocalLibraryFile = (rawUrl: unknown, projectId = defaultProjectId) => {
+    if (typeof rawUrl !== 'string' || !rawUrl.trim()) return null;
+
+    let parsed: URL;
+    try {
+      parsed = new URL(rawUrl, 'http://local');
+    } catch {
+      return null;
+    }
+
+    if (parsed.origin !== 'http://local') return null;
+    return resolveLibraryFile(parsed.pathname, projectId);
+  };
+
   const libraryUrlFor = (projectId: string, filename: string) => {
     return projectId === defaultProjectId ? `/library/${filename}` : `/projects/${projectId}/library/${filename}`;
   };
@@ -343,6 +360,32 @@ async function startServer() {
       }
     }
   };
+
+  app.post('/api/reveal-file', async (req, res) => {
+    const projectId = safeProjectId(req.body?.projectId) || defaultProjectId;
+    const filePath = resolveLocalLibraryFile(req.body?.url, projectId);
+    if (!filePath) {
+      return res.status(400).json({ error: 'Only saved local library files can be revealed in Finder.' });
+    }
+    if (process.platform !== 'darwin') {
+      return res.status(501).json({ error: 'Reveal in Finder is only available on macOS.' });
+    }
+
+    try {
+      const fileStats = await fs.stat(filePath);
+      if (!fileStats.isFile()) {
+        return res.status(400).json({ error: 'Only saved local media files can be revealed in Finder.' });
+      }
+      await execFileAsync('open', ['-R', filePath]);
+      return res.json({ ok: true });
+    } catch (error: any) {
+      if (error?.code === 'ENOENT') {
+        return res.status(404).json({ error: 'Saved local media file was not found.' });
+      }
+      console.error('Reveal file error:', error);
+      return res.status(500).json({ error: 'Unable to reveal file in Finder.' });
+    }
+  });
 
   app.get('/api/projects', async (_req, res) => {
     res.json({ projects: await listProjects(), defaultProjectId });

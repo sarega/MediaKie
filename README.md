@@ -17,6 +17,7 @@ Current version: `1.4.0`
 - Use Case and Provider model browsing with search
 - Google Omni, Seedance, Kling, Veo, and Nano Banana model grouping labels
 - Simple video editor for assembling, trimming, splitting, previewing, and exporting generated clips
+- Reveal saved generated files in Finder directly from the result and Activity Log
 
 ## How to use
 
@@ -65,6 +66,10 @@ npm run check:improvements
 ```
 
 ## Update log
+
+### Unreleased
+
+- Added a Reveal in Finder action for generated media saved in the local project library.
 
 ### 1.4.0 — 2026-09-02
 

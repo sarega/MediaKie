@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { GenerationLog } from '../types';
 import { formatDistanceToNow } from 'date-fns';
-import { AlertCircle, Clock, CheckCircle2, Copy, ExternalLink, ImagePlus, Trash2, ScanLine } from 'lucide-react';
+import { AlertCircle, Clock, CheckCircle2, Copy, ExternalLink, FolderOpen, ImagePlus, Trash2, ScanLine } from 'lucide-react';
 
 interface Props {
   logs: GenerationLog[];
@@ -10,6 +10,7 @@ interface Props {
   onSelectLog: (id: string) => void;
   onUseAsSource: (asset: { type: 'image' | 'video'; url: string; label?: string }) => void;
   onGrabVideoFrame: (url: string) => void;
+  onRevealFile: (url: string) => void;
   onDeleteLog: (id: string) => void;
   onResumeLog: (id: string) => void;
 }
@@ -69,7 +70,9 @@ const formatDuration = (ms: number) => {
   return `${remainingSeconds}s`;
 };
 
-export function ActivityLog({ logs, activeLogId, autoplayVideos, onSelectLog, onUseAsSource, onGrabVideoFrame, onDeleteLog, onResumeLog }: Props) {
+const isLocalLibraryUrl = (url: string) => url.startsWith('/library/') || url.startsWith('/projects/');
+
+export function ActivityLog({ logs, activeLogId, autoplayVideos, onSelectLog, onUseAsSource, onGrabVideoFrame, onRevealFile, onDeleteLog, onResumeLog }: Props) {
   const [now, setNow] = useState(Date.now());
   const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE);
 
@@ -215,6 +218,20 @@ export function ActivityLog({ logs, activeLogId, autoplayVideos, onSelectLog, on
                           aria-label="Grab frame as source image"
                         >
                           <ScanLine className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                      {isLocalLibraryUrl(url) && (
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            onRevealFile(url);
+                          }}
+                          className="h-7 w-7 rounded-md border border-white/10 bg-neutral-950/90 text-white grid place-items-center hover:bg-neutral-800"
+                          title="Reveal file in Finder"
+                          aria-label="Reveal file in Finder"
+                        >
+                          <FolderOpen className="w-3.5 h-3.5" />
                         </button>
                       )}
                       <a
