@@ -1527,6 +1527,14 @@ export const KIE_CATALOG: KieCatalogEntry[] = [
 ];
 
 export interface GenerationLog {
+  generationJobId?: string;
+  providerTaskId?: string;
+  normalizedStatus?: string;
+  logicalModel?: string;
+  settingsSnapshot?: Record<string, any>;
+  estimatedCost?: {usd:number|null;credits?:number;kind:string;source:string};
+  finalCost?: {usd:number|null;kind:string;source:string};
+
   id: string;
   timestamp: string;
   modelId: string;

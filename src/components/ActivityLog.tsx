@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import {MediaThumbnail} from './MediaThumbnail';
 import { GenerationLog } from '../types';
 import { formatDistanceToNow } from 'date-fns';
 import { AlertCircle, Clock, CheckCircle2, Copy, ExternalLink, FolderOpen, ImagePlus, Trash2, ScanLine } from 'lucide-react';
@@ -12,53 +13,14 @@ interface Props {
   onGrabVideoFrame: (url: string) => void;
   onRevealFile: (url: string) => void;
   onDeleteLog: (id: string) => void;
+  onCancelLog?: (id:string)=>void;
   onResumeLog: (id: string) => void;
 }
 
 const HISTORY_PAGE_SIZE = 30;
 
-function MediaPreview({ url, type, alt, autoplay }: { url: string; type: 'image' | 'video'; alt: string; autoplay: boolean }) {
-  const videoRef = useRef<HTMLVideoElement>(null);
-  const [isVisible, setIsVisible] = useState(false);
-
-  useEffect(() => {
-    if (type !== 'video') return;
-    const video = videoRef.current;
-    if (!video) return;
-    if (typeof IntersectionObserver === 'undefined') {
-      setIsVisible(true);
-      return;
-    }
-
-    const observer = new IntersectionObserver(([entry]) => setIsVisible(entry.isIntersecting), { rootMargin: '120px' });
-    observer.observe(video);
-    return () => observer.disconnect();
-  }, [autoplay, type]);
-
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !autoplay) return;
-    if (isVisible) void video.play().catch(() => {});
-    else video.pause();
-  }, [autoplay, isVisible]);
-
-  if (type === 'video') {
-    return (
-      <video
-        ref={videoRef}
-        src={url}
-        className="w-full h-auto max-h-32 object-cover"
-        muted
-        loop
-        controls
-        autoPlay={autoplay && isVisible}
-        preload={isVisible ? 'metadata' : 'none'}
-        playsInline
-      />
-    );
-  }
-
-  return <img src={url} alt={alt} loading="lazy" className="w-full h-auto max-h-32 object-cover" />;
+function MediaPreview({url,type,alt}:{url:string;type:'image'|'video';alt:string;autoplay:boolean}) {
+  return <MediaThumbnail url={url} type={type} alt={alt} className="w-full aspect-video"/>;
 }
 
 const formatDuration = (ms: number) => {
@@ -72,7 +34,7 @@ const formatDuration = (ms: number) => {
 
 const isLocalLibraryUrl = (url: string) => url.startsWith('/library/') || url.startsWith('/projects/');
 
-export function ActivityLog({ logs, activeLogId, autoplayVideos, onSelectLog, onUseAsSource, onGrabVideoFrame, onRevealFile, onDeleteLog, onResumeLog }: Props) {
+export function ActivityLog({onCancelLog, logs, activeLogId, autoplayVideos, onSelectLog, onUseAsSource, onGrabVideoFrame, onRevealFile, onDeleteLog, onResumeLog }: Props) {
   const [now, setNow] = useState(Date.now());
   const [visibleCount, setVisibleCount] = useState(HISTORY_PAGE_SIZE);
 
@@ -144,6 +106,8 @@ export function ActivityLog({ logs, activeLogId, autoplayVideos, onSelectLog, on
             </div>
           </div>
 
+          <div className="flex items-center gap-2 text-xs text-neutral-500"><span>{log.provider} · {log.normalizedStatus || log.status}</span>{(log.status==='generating'||log.pollingState==='timed-out') && onCancelLog && <button onClick={()=>onCancelLog(log.id)} className="text-violet-300">{log.normalizedStatus==='queued'?'Cancel':'Stop tracking'}</button>}</div>
+          {log.estimatedCost && <p className="text-xs text-neutral-500">Estimated: {log.estimatedCost.usd == null ? 'Unverified' : `$${log.estimatedCost.usd.toFixed(4)}`} · Final: {log.finalCost?.usd == null ? 'Not reported' : `$${log.finalCost.usd.toFixed(4)}`}</p>}
           <div className="text-sm text-neutral-400 line-clamp-2 leading-relaxed">
             "{log.prompt}"
           </div>
@@ -156,7 +120,7 @@ export function ActivityLog({ logs, activeLogId, autoplayVideos, onSelectLog, on
                 : '-'}
           </div>
 
-          {log.status === 'generating' && log.pollingState && log.pollingState !== 'active' && (
+          {log.pollingState === 'timed-out' && (
             <div className="flex items-start gap-2 rounded-md bg-amber-400/10 p-2 text-xs text-amber-300" role="status">
               <span className="min-w-0 flex-1">{log.error || 'Task status needs attention.'}</span>
               <button
@@ -172,7 +136,7 @@ export function ActivityLog({ logs, activeLogId, autoplayVideos, onSelectLog, on
             </div>
           )}
 
-          {log.status === 'failed' && log.error && (
+          {log.status === 'failed' && log.error && log.pollingState !== 'timed-out' && (
             <div className="text-xs text-red-400 bg-red-400/10 p-2 rounded-md">
               {log.error}
             </div>

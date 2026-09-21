@@ -5,8 +5,11 @@ import { execFile } from 'node:child_process';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { promisify } from 'node:util';
+import os from 'node:os';
 import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
+import {createThumbnailer} from './providers/thumbnails';
+import { installProviders } from './providers/service';
 
 dotenv.config({ path: ['.env.local', '.env'] });
 
@@ -250,7 +253,15 @@ async function startServer() {
 
   await migrateLegacyProject();
 
-  app.use(express.json({ limit: '50mb' })); // Support large base64/image payloads
+  app.use((req, res, next) => {
+    const origin = req.headers.origin;
+    if (origin && origin !== `http://${req.headers.host}` && origin !== `https://${req.headers.host}`) return res.status(403).json({error:'Cross-origin requests are not allowed'});
+    if (req.headers['sec-fetch-site'] === 'cross-site') return res.status(403).json({error:'Cross-site requests are not allowed'});
+    next();
+  });
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ limit: '1mb', extended: false }));
+  const providerService = await installProviders(app, dataDir, assertPublicRemoteUrl); // Support large base64/image payloads
   app.use('/library', express.static(getProjectLibraryDir(defaultProjectId)));
   app.use('/projects/:projectId/library', (req, res, next) => {
     const projectId = safeProjectId(req.params.projectId);
@@ -266,6 +277,15 @@ async function startServer() {
     } catch {
       return [];
     }
+  };
+
+  const selectedLogIds = (value: unknown): string[] => {
+    let ids = value;
+    if (typeof ids === 'string') {
+      try { ids = JSON.parse(ids); } catch { ids = []; }
+    }
+    if (!Array.isArray(ids)) return [];
+    return [...new Set<string>(ids.filter((id): id is string => typeof id === 'string' && id.length > 0 && id.length <= 200))].slice(0, 500);
   };
 
   const historyWriteQueues = new Map<string, Promise<unknown>>();
@@ -361,6 +381,16 @@ async function startServer() {
     }
   };
 
+  const thumbnailFor = createThumbnailer(path.join(dataDir, 'thumbnails'));
+  app.get('/api/media/thumbnail', async (req, res) => {
+    const url = typeof req.query.url === 'string' ? req.query.url : '';
+    const projectId = url.match(/^\/projects\/([^/]+)\/library\//)?.[1] || defaultProjectId;
+    const source = resolveLocalLibraryFile(url, projectId);
+    if (!source) return res.status(400).json({error:'A local library video is required'});
+    try { const thumbnail=await thumbnailFor(source);res.setHeader('Cache-Control','private, max-age=86400');res.sendFile(thumbnail); }
+    catch {res.status(404).json({error:'Preview unavailable; open the original video'});}
+  });
+
   app.post('/api/reveal-file', async (req, res) => {
     const projectId = safeProjectId(req.body?.projectId) || defaultProjectId;
     const filePath = resolveLocalLibraryFile(req.body?.url, projectId);
@@ -409,6 +439,71 @@ async function startServer() {
     res.json({ project: next });
   });
 
+  app.get('/api/projects/:projectId/export', async (req, res) => {
+    const projectId = safeProjectId(req.params.projectId);
+    if (!projectId) return res.status(400).json({ error: 'Invalid project id' });
+
+    const project = await readJson(getProjectMetaPath(projectId), null);
+    if (!project?.id) return res.status(404).json({ error: 'Project not found' });
+
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kai-media-studio-export-'));
+    const archivePath = path.join(tempDir, 'project.zip');
+    try {
+      await withHistoryWrite(projectId, async () => {
+        await execFileAsync('zip', ['-r', '-q', archivePath, 'project.json', 'history.json', 'library'], {
+          cwd: getProjectDir(projectId),
+        });
+      });
+      const filename = `${safeDownloadFilename(project.name)}-backup.zip`;
+      res.download(archivePath, filename, async () => {
+        await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      });
+    } catch (error) {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      console.error('Project export error:', error);
+      if (!res.headersSent) res.status(500).json({ error: 'Unable to export project backup.' });
+    }
+  });
+
+  app.post('/api/projects/:projectId/export-selection', async (req, res) => {
+    const projectId = safeProjectId(req.params.projectId);
+    const logIds = selectedLogIds(req.body?.logIds);
+    if (!projectId) return res.status(400).json({ error: 'Invalid project id' });
+    if (logIds.length === 0) return res.status(400).json({ error: 'Select at least one library item' });
+
+    const project = await readJson(getProjectMetaPath(projectId), null);
+    if (!project?.id) return res.status(404).json({ error: 'Project not found' });
+
+    const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'kai-media-studio-selection-'));
+    const archivePath = path.join(tempDir, 'selection.zip');
+    try {
+      await withHistoryWrite(projectId, async () => {
+        const selected = (await readHistory(projectId)).filter((log: any) => logIds.includes(log.id));
+        const mediaFiles: string[] = [...new Set<string>(selected.flatMap(mediaUrlsFromLog)
+          .map((url: string) => resolveLibraryFile(url, projectId))
+          .filter((filePath: string | null): filePath is string => Boolean(filePath)))];
+        const existingFiles: string[] = [];
+        for (const filePath of mediaFiles) {
+          const relativePath = path.relative(getProjectLibraryDir(projectId), filePath);
+          if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) continue;
+          if ((await fs.stat(filePath).catch(() => null))?.isFile()) existingFiles.push(filePath);
+        }
+        if (existingFiles.length === 0) throw new Error('The selected items do not have saved local media to export');
+        await fs.writeFile(path.join(tempDir, 'selection.json'), JSON.stringify({ version: 1, exportedAt: new Date().toISOString(), project, logs: selected }, null, 2));
+        await execFileAsync('zip', ['-q', archivePath, 'selection.json'], { cwd: tempDir });
+        await execFileAsync('zip', ['-q', '-j', archivePath, ...existingFiles]);
+      });
+      const filename = `${safeDownloadFilename(project.name)}-selected-${logIds.length}.zip`;
+      res.download(archivePath, filename, async () => {
+        await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      });
+    } catch (error: any) {
+      await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
+      console.error('Selection export error:', error);
+      if (!res.headersSent) res.status(400).json({ error: error.message || 'Unable to export selected media.' });
+    }
+  });
+
   app.get('/api/projects/:projectId/history', async (req, res) => {
     const projectId = safeProjectId(req.params.projectId);
     if (!projectId) return res.status(400).json({ error: 'Invalid project id' });
@@ -450,12 +545,32 @@ async function startServer() {
     const projectId = safeProjectId(req.params.projectId);
     if (!projectId) return res.status(400).json({ error: 'Invalid project id' });
 
+    await providerService.hideProjectJobs(projectId);
     await withHistoryWrite(projectId, async () => {
       const currentLogs = await readHistory(projectId);
       await removeUnreferencedMedia(projectId, currentLogs, []);
       await writeHistoryFile(projectId, []);
     });
     res.json({ logs: [] });
+  });
+
+  app.post('/api/projects/:projectId/history/delete-many', async (req, res) => {
+    const projectId = safeProjectId(req.params.projectId);
+    const logIds = selectedLogIds(req.body?.logIds);
+    if (!projectId) return res.status(400).json({ error: 'Invalid project id' });
+    if (logIds.length === 0) return res.status(400).json({ error: 'Select at least one library item' });
+
+    await providerService.hideProjectJobs(projectId, logIds);
+    const nextLogs = await withHistoryWrite(projectId, async () => {
+      const logs = await readHistory(projectId);
+      const selected = new Set(logIds);
+      const removed = logs.filter((log: any) => selected.has(log.id));
+      const remaining = logs.filter((log: any) => !selected.has(log.id));
+      await removeUnreferencedMedia(projectId, removed, remaining);
+      await writeHistoryFile(projectId, remaining);
+      return remaining;
+    });
+    res.json({ logs: nextLogs, deleted: logIds.length });
   });
 
   app.delete('/api/projects/:projectId/history/:id', async (req, res) => {
@@ -659,14 +774,7 @@ async function startServer() {
       const ext = mimeType.split('/')[1] || 'bin';
       const filename = `kie-media-${Date.now()}.${ext}`;
 
-      let apiKey = '';
-      const authHeader = req.headers.authorization;
-      if (authHeader && authHeader.startsWith('Bearer ')) {
-        apiKey = authHeader.split(' ')[1];
-      }
-      if (!apiKey) {
-        apiKey = process.env.KIE_API_KEY || '';
-      }
+      const apiKey = providerService.kieKey();
       if (!apiKey) {
         return res.status(401).json({ error: 'KIE_API_KEY is required for Kie file uploads.' });
       }
@@ -704,23 +812,13 @@ async function startServer() {
   // Kie AI Proxy route
   app.all('/api/kie/:endpoint(*)', async (req, res) => {
     try {
-      // 1. Try to get key from client request header (Authorization: Bearer XXX)
-      let apiKey = '';
-      const authHeader = req.headers.authorization;
-      if (authHeader && authHeader.startsWith('Bearer ')) {
-        apiKey = authHeader.split(' ')[1];
-      }
-      
-      // 2. Fallback to server environment variable
-      if (!apiKey) {
-        apiKey = process.env.KIE_API_KEY || '';
-      }
-
+      const apiKey = providerService.kieKey();
       if (!apiKey) {
         return res.status(401).json({ error: 'KIE_API_KEY is not set. Please provide it in the API settings or environment variables.' });
       }
 
       const { endpoint } = req.params;
+      if (req.method !== 'GET' || !['api/v1/chat/credit','api/v1/jobs/recordInfo','api/v1/veo/record-info'].includes(endpoint)) return res.status(400).json({error:'Use the provider-neutral generation API for new jobs.'});
       const queryStr = req.url.includes('?') ? req.url.substring(req.url.indexOf('?')) : '';
       const kieUrl = `https://api.kie.ai/${endpoint}${queryStr}`;
 

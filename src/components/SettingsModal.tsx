@@ -1,206 +1,73 @@
-import React, { useState, useEffect } from 'react';
-import { History, Key, Moon, Sun, X } from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import React, { useEffect, useState } from 'react';
 import type { AppTheme } from '../types';
-
-const APP_VERSION = '1.4.0';
-const UPDATE_LOG = [
-  {
-    version: '1.4.0',
-    date: '2026-09-02',
-    changes: [
-      'Updated Kie models and credit estimates.',
-      'Added parallel generation and selectable activity items.',
-      'Credits now refresh automatically while jobs run and when they finish.',
-    ],
-  },
-  {
-    version: '1.3.0',
-    date: '2026-08-03',
-    changes: [
-      'Added Light and Dark theme settings.',
-      'Added PixVerse V6 and MiniMax H3 modes with live cost estimates.',
-      'Kept model Parameters open by default.',
-    ],
-  },
-  {
-    version: '1.2.0',
-    date: '2026-06-19',
-    changes: [
-      'Added resizable model and activity panes.',
-      'Added the video editor workflow and Clypra adapter host.',
-    ],
-  },
-];
-
+import { jsonRequest } from '../generation/client';
 interface Props {
-  isOpen: boolean;
-  autoplayVideos: boolean;
-  theme: AppTheme;
-  onClose: () => void;
-  onSaveSettings: (autoplayVideos: boolean, theme: AppTheme) => void;
+    isOpen: boolean;
+    autoplayVideos: boolean;
+    theme: AppTheme;
+    onClose: () => void;
+    onSaveSettings: (autoplay: boolean, theme: AppTheme) => void;
 }
-
 export function SettingsModal({ isOpen, autoplayVideos, theme, onClose, onSaveSettings }: Props) {
-  const [apiKey, setApiKey] = useState('');
-  const [autoplay, setAutoplay] = useState(autoplayVideos);
-  const [selectedTheme, setSelectedTheme] = useState<AppTheme>(theme);
-
-  useEffect(() => {
-    if (isOpen) {
-      const stored = localStorage.getItem('kie_client_api_key');
-      if (stored) setApiKey(stored);
-      setAutoplay(autoplayVideos);
-      setSelectedTheme(theme);
+    const [config, setConfig] = useState<any>(null);
+    const [kie, setKie] = useState('');
+    const [hfId, setHfId] = useState('');
+    const [hfSecret, setHfSecret] = useState('');
+    const [error, setError] = useState('');
+    const [saving, setSaving] = useState(false);
+    const [checks, setChecks] = useState<Record<string, string>>({});
+    const [autoplay, setAutoplay] = useState(autoplayVideos);
+    const [appearance, setAppearance] = useState(theme);
+    useEffect(() => { if (isOpen) {
+        setConfig(null);
+        setError('');
+        setKie('');
+        setHfId('');
+        setHfSecret('');
+        setAutoplay(autoplayVideos);
+        setAppearance(theme);
+        jsonRequest('/api/providers').then(setConfig).catch(e => setError(e.message));
+    } }, [isOpen]);
+    if (!isOpen)
+        return null;
+    const field = 'w-full rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 mt-1 text-sm';
+    async function save() {
+        setSaving(true);
+        setError('');
+        try {
+            if (Boolean(hfId) !== Boolean(hfSecret))
+                throw new Error('Enter both Higgsfield key ID and secret');
+            const response = await fetch('/api/providers', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ ...config, keys: { kie, ...(hfId && hfSecret ? { higgsfield: `${hfId}:${hfSecret}` } : {}) } }) });
+            const data = await response.json();
+            if (!response.ok)
+                throw new Error(data.error);
+            localStorage.removeItem('kie_client_api_key');
+            localStorage.setItem('kie_autoplay_videos', String(autoplay));
+            localStorage.setItem('kie_theme', appearance);
+            setKie('');
+            setHfId('');
+            setHfSecret('');
+            window.dispatchEvent(new Event('studio-providers-changed'));
+            onSaveSettings(autoplay, appearance);
+            onClose();
+        }
+        catch (e: any) {
+            setError(e.message);
+        }
+        finally {
+            setSaving(false);
+        }
     }
-  }, [isOpen, autoplayVideos, theme]);
-
-  const handleSave = () => {
-    const nextKey = apiKey.trim();
-    localStorage.setItem('kie_client_api_key', nextKey);
-    localStorage.setItem('kie_autoplay_videos', String(autoplay));
-    localStorage.setItem('kie_theme', selectedTheme);
-    onSaveSettings(autoplay, selectedTheme);
-    onClose();
-  };
-
-  return (
-    <AnimatePresence>
-      {isOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            onClick={onClose}
-            className="absolute inset-0 bg-black/60 backdrop-blur-sm"
-          />
-          <motion.div
-            initial={{ opacity: 0, scale: 0.95, y: 10 }}
-            animate={{ opacity: 1, scale: 1, y: 0 }}
-            exit={{ opacity: 0, scale: 0.95, y: 10 }}
-            className="relative flex w-full max-w-lg max-h-[85vh] flex-col overflow-hidden bg-neutral-900 border border-neutral-800 rounded-2xl shadow-2xl p-6"
-          >
-            <button
-              type="button"
-              onClick={onClose}
-              className="absolute top-4 right-4 text-neutral-500 hover:text-neutral-100 transition-colors"
-              title="Close settings"
-            >
-              <X className="w-5 h-5" />
-            </button>
-
-            <div className="flex items-start gap-3 mb-6 pr-8">
-              <div className="w-10 h-10 shrink-0 rounded-full bg-indigo-500/20 flex items-center justify-center">
-                <Key className="w-5 h-5 text-indigo-400" />
-              </div>
-              <div>
-                <h2 className="text-lg font-semibold text-neutral-100">Settings</h2>
-                <p className="text-xs text-neutral-400">Connection, appearance, and app information</p>
-              </div>
-            </div>
-
-            <div className="min-h-0 flex-1 space-y-5 overflow-y-auto pr-1">
-              <section className="space-y-3">
-                <div>
-                  <h3 className="text-sm font-semibold text-neutral-200">Appearance</h3>
-                  <p className="text-xs text-neutral-500 mt-1">Choose the workspace color theme.</p>
-                </div>
-                <div role="group" aria-label="Theme" className="grid grid-cols-2 gap-2 rounded-xl border border-neutral-800 bg-neutral-950 p-1">
-                  <button
-                    type="button"
-                    aria-pressed={selectedTheme === 'light'}
-                    onClick={() => setSelectedTheme('light')}
-                    className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${selectedTheme === 'light' ? 'bg-indigo-500 text-white' : 'text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200'}`}
-                  >
-                    <Sun className="w-4 h-4" />
-                    Light
-                  </button>
-                  <button
-                    type="button"
-                    aria-pressed={selectedTheme === 'dark'}
-                    onClick={() => setSelectedTheme('dark')}
-                    className={`flex items-center justify-center gap-2 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors ${selectedTheme === 'dark' ? 'bg-indigo-500 text-white' : 'text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200'}`}
-                  >
-                    <Moon className="w-4 h-4" />
-                    Dark
-                  </button>
-                </div>
-              </section>
-
-              <label className="flex items-center justify-between gap-4 rounded-xl border border-neutral-800 bg-neutral-950 px-4 py-3">
-                <div>
-                  <span className="block text-sm font-medium text-neutral-300">Autoplay videos</span>
-                  <span className="block text-xs text-neutral-500 mt-1">Play new results automatically</span>
-                </div>
-                <input
-                  type="checkbox"
-                  checked={autoplay}
-                  onChange={(event) => setAutoplay(event.target.checked)}
-                  className="h-4 w-4 accent-indigo-500"
-                />
-              </label>
-
-              <div>
-                <label className="block text-sm font-medium text-neutral-300 mb-2">
-                  Kie AI API Key
-                </label>
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  placeholder="sk-..."
-                  autoComplete="off"
-                  className="w-full bg-neutral-950 border border-neutral-700/50 rounded-xl px-4 py-3 text-sm text-neutral-100 placeholder:text-neutral-600 focus:outline-none focus:border-indigo-500 focus:ring-1 ring-indigo-500 transition-all"
-                />
-                <p className="text-xs text-neutral-500 mt-2">
-                  Stored in this browser's local storage and readable by scripts running on this app's origin. Use <code>.env.local</code> on a trusted local machine when possible; a browser key overrides the server key.
-                </p>
-              </div>
-
-              <section className="border-t border-neutral-800 pt-5">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <History className="w-4 h-4 text-indigo-400" />
-                    <h3 className="text-sm font-semibold text-neutral-200">Update log</h3>
-                  </div>
-                  <span className="text-xs font-mono text-neutral-500">v{APP_VERSION}</span>
-                </div>
-                <div className="mt-3 space-y-4">
-                  {UPDATE_LOG.map((release) => (
-                    <div key={release.version} className="border-l-2 border-indigo-500/40 pl-3">
-                      <div className="flex items-baseline justify-between gap-3">
-                        <span className="text-sm font-medium text-neutral-200">Version {release.version}</span>
-                        <span className="text-[11px] text-neutral-500">{release.date}</span>
-                      </div>
-                      <ul className="mt-2 space-y-1 text-xs leading-relaxed text-neutral-500">
-                        {release.changes.map((change) => <li key={change}>{change}</li>)}
-                      </ul>
-                    </div>
-                  ))}
-                </div>
-              </section>
-            </div>
-
-            <div className="mt-5 flex shrink-0 justify-end gap-3 border-t border-neutral-800 bg-neutral-900 pt-4">
-              <button
-                type="button"
-                onClick={onClose}
-                className="px-4 py-2 rounded-lg text-sm font-medium text-neutral-400 hover:text-neutral-100 transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={handleSave}
-                className="px-4 py-2 rounded-lg text-sm font-medium bg-indigo-500 hover:bg-indigo-400 text-white transition-colors shadow-lg"
-              >
-                Save Settings
-              </button>
-            </div>
-          </motion.div>
-        </div>
-      )}
-    </AnimatePresence>
-  );
+    return <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/70" role="dialog" aria-modal="true" aria-label="Settings" onKeyDown={e => { if (e.key === 'Escape')
+        onClose(); }}><div className="w-full max-w-2xl max-h-[90vh] flex flex-col rounded-2xl border border-neutral-700 bg-neutral-900 p-6">
+ <div className="flex justify-between mb-5"><h2 className="text-xl font-semibold">Settings</h2><button autoFocus onClick={onClose} aria-label="Close settings">✕</button></div>
+ <div className="overflow-y-auto space-y-6 pr-1">{error && <p role="alert" className="text-red-300">{error}</p>}{!config ? <p className="text-neutral-400">Loading provider settings…</p> : <>
+ <section><h3 className="font-semibold mb-3">Providers</h3><p className="text-xs text-neutral-500 mb-4">Secrets are stored on this computer’s server, never returned to the browser. Leave fields empty to retain existing credentials.</p>
+ {(['kie', 'higgsfield'] as const).map(id => <div key={id} className="rounded-xl border border-neutral-800 p-4 mb-3"><div className="flex justify-between"><h4>{id === 'kie' ? 'Kie.ai' : 'Higgsfield'}</h4><span className="text-xs text-neutral-400">{config.providers.find((p: any) => p.id === id)?.configured ? 'Credentials configured' : 'Not configured'}</span></div>
+ {id === 'kie' ? <label className="block mt-3 text-xs text-neutral-400">API key<input type="password" autoComplete="new-password" className={field} value={kie} onChange={e => setKie(e.target.value)}/></label> : <div className="grid sm:grid-cols-2 gap-3 mt-3"><label className="text-xs text-neutral-400">Key ID<input type="password" autoComplete="new-password" className={field} value={hfId} onChange={e => setHfId(e.target.value)}/></label><label className="text-xs text-neutral-400">Key secret<input type="password" autoComplete="new-password" className={field} value={hfSecret} onChange={e => setHfSecret(e.target.value)}/></label></div>}
+ <div className="mt-3 flex gap-3 items-center"><label className="text-xs text-neutral-400">Concurrent jobs <input type="number" min="1" max="20" className="w-16 rounded bg-neutral-950 p-1 ml-2" value={config.limits[id]} onChange={e => setConfig({ ...config, limits: { ...config.limits, [id]: Number(e.target.value) } })}/></label><button className="text-xs text-violet-300" onClick={() => { jsonRequest(`/api/providers/${id}/check`, {}).then(r => setChecks({ ...checks, [id]: r.message })).catch(e => setChecks({ ...checks, [id]: e.message })); }}>Check saved connection</button></div>{checks[id] && <p className="text-xs text-neutral-400 mt-2">{checks[id]}</p>}</div>)}
+ </section><section><h3 className="font-semibold mb-3">Generation defaults</h3><div className="grid sm:grid-cols-2 gap-4 text-sm"><label>Provider selection<select className={field} value={config.policy} onChange={e => setConfig({ ...config, policy: e.target.value })}><option value="auto">Auto</option><option value="manual">Manual</option><option value="lowest-cost">Lowest cost</option><option value="preferred">Preferred</option><option value="fastest">Fastest / preferred</option></select></label><label>Preferred provider<select className={field} value={config.priority[0]} onChange={e => setConfig({ ...config, priority: e.target.value === 'kie' ? ['kie', 'higgsfield'] : ['higgsfield', 'kie'] })}><option value="kie">Kie.ai</option><option value="higgsfield">Higgsfield</option></select></label><label>Maximum concurrent jobs<input className={field} type="number" min="1" max="20" value={config.maxConcurrent} onChange={e => setConfig({ ...config, maxConcurrent: Number(e.target.value) })}/></label><label>Local estimated spend cap (USD)<input className={field} type="number" min="0.01" step="0.01" placeholder="No cap" value={config.spendCap ?? ''} onChange={e => setConfig({ ...config, spendCap: e.target.value === '' ? null : Number(e.target.value) })}/></label></div><p className="text-xs text-neutral-500 mt-3">Fastest uses provider priority until latency data exists. The cap covers all jobs submitted through this installation, reserves estimates, and blocks unknown prices; it is not an account billing limit.</p></section>
+ <section className="flex flex-wrap gap-6 text-sm"><label>Theme<select className={field} value={appearance} onChange={e => setAppearance(e.target.value as AppTheme)}><option value="dark">Dark</option><option value="light">Light</option></select></label><label className="flex items-center gap-2"><input type="checkbox" checked={autoplay} onChange={e => setAutoplay(e.target.checked)}/>Autoplay video results</label></section>
+ </>}</div><div className="flex justify-end gap-3 mt-5 pt-4 border-t border-neutral-800"><button onClick={onClose} className="px-4 py-2 text-neutral-400">Cancel</button><button onClick={save} disabled={!config || saving} className="px-4 py-2 bg-violet-600 rounded-lg disabled:opacity-50">{saving ? 'Saving…' : 'Save settings'}</button></div>
+ </div></div>;
 }

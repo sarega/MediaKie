@@ -1,0 +1,22 @@
+import React, {useState} from 'react';
+import {MODEL_REGISTRY,defaultsFor,estimateCost,type RegistryModel} from '../../models/registry';
+import {WORKFLOWS,primaryWorkflow,supportsWorkflow,type Workflow} from '../../models/workflows';
+export function ModelBrowser({onSelect,onClose,modality,initialWorkflow='all',hasReference=false}:{onSelect:(model:RegistryModel,workflow:Workflow)=>void;onClose:()=>void;modality?:string;initialWorkflow?:Workflow;hasReference?:boolean}) {
+ const [query,setQuery]=useState('');
+ const [provider,setProvider]=useState('all');
+ const [vendor,setVendor]=useState('all');
+ const [workflow,setWorkflow]=useState<Workflow>(initialWorkflow);
+ const choices=WORKFLOWS.filter(w=>w.modality==='all'||!modality||w.modality===modality);
+ const inModality=MODEL_REGISTRY.filter(m=>!modality||(modality==='video'?m.category.includes('video'):!m.category.includes('video')));
+ const vendors=[...new Set(inModality.map(m=>m.provider))].sort();
+ const models=inModality.filter(m=>supportsWorkflow(m,workflow)&&(provider==='all'||m.mappings.some(p=>p.provider===provider))&&(vendor==='all'||m.provider===vendor)&&`${m.name} ${m.familyName} ${m.provider} ${m.category} ${WORKFLOWS.find(w=>w.id===primaryWorkflow(m))?.label} ${m.mappings.map(p=>p.provider).join(' ')}`.toLowerCase().includes(query.toLowerCase())).sort((a,b)=>(a.familyName||a.name).localeCompare(b.familyName||b.name));
+ return <div className="fixed inset-0 z-50 bg-black/70 p-3 sm:p-10 flex items-center justify-center" role="dialog" aria-modal="true" aria-label="Choose a model" onKeyDown={e=>{if(e.key==='Escape')onClose();}}>
+  <div className="w-full max-w-5xl max-h-[90vh] flex flex-col rounded-2xl bg-neutral-900 border border-neutral-700 shadow-2xl p-4 sm:p-5">
+   <div className="flex justify-between gap-4 mb-4"><div><h2 className="text-xl font-semibold">Choose a workflow and model</h2><p className="text-neutral-400 text-sm mt-1">{hasReference?'Your image is attached. Choose a compatible model to continue.':'Filter by what you want to create, then choose a model.'}</p></div><button onClick={onClose} aria-label="Close model browser">✕</button></div>
+   <div className="flex flex-wrap gap-2 mb-4" role="group" aria-label="Workflow filters">{choices.map(w=><button key={w.id} aria-pressed={workflow===w.id} onClick={()=>setWorkflow(w.id)} className={`rounded-lg px-3 py-2 text-xs border ${workflow===w.id?'border-violet-400 bg-violet-500/20 text-violet-200':'border-neutral-700 text-neutral-400 hover:border-neutral-500'}`}>{w.label}</button>)}</div>
+   <div className="flex flex-wrap gap-2 mb-3"><input autoFocus aria-label="Search models" placeholder="Search model or family…" className="flex-1 min-w-40 rounded-lg bg-neutral-950 border border-neutral-700 p-3 text-sm" value={query} onChange={e=>setQuery(e.target.value)}/><select aria-label="Filter model vendor" className="bg-neutral-950 rounded-lg p-2 text-sm" value={vendor} onChange={e=>setVendor(e.target.value)}><option value="all">All model vendors</option>{vendors.map(v=><option key={v}>{v}</option>)}</select><select aria-label="Filter API providers" className="bg-neutral-950 rounded-lg p-2 text-sm" value={provider} onChange={e=>setProvider(e.target.value)}><option value="all">All API providers</option><option value="kie">Kie.ai</option><option value="higgsfield">Higgsfield</option></select></div>
+   <p className="text-xs text-neutral-500 mb-4">{models.length} models · {WORKFLOWS.find(w=>w.id===workflow)?.hint}</p>
+   <div className="overflow-y-auto grid sm:grid-cols-2 gap-3">{models.map(m=><button key={`${m.category}:${m.id}`} disabled={!!m.unavailableReason} onClick={()=>onSelect(m,workflow==='all'?primaryWorkflow(m):workflow)} className="text-left p-4 rounded-xl border border-neutral-800 bg-neutral-950 hover:border-violet-500 disabled:opacity-50"><div className="text-xs text-violet-400 mb-2">{m.provider} · {m.familyName||m.name}</div><h3 className="font-semibold">{m.name}</h3><p className="text-xs text-neutral-300 mt-2">{WORKFLOWS.find(w=>w.id===primaryWorkflow(m))?.label}</p><p className="text-xs text-neutral-500 mt-3">{m.unavailableReason||m.mappings.map(p=>{const c=estimateCost(m,p.provider,defaultsFor(m));return `${p.provider==='kie'?'Kie.ai':'Higgsfield'} · ${c.usd==null?'Price unverified':`Est. $${c.usd.toFixed(4)}`}`;}).join(' / ')}</p></button>)}{!models.length&&<p className="p-6 text-neutral-400">No models match. Try another workflow or clear a filter.</p>}</div>
+  </div>
+ </div>;
+}

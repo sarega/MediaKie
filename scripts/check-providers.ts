@@ -1,0 +1,72 @@
+import assert from 'node:assert/strict';
+import React from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
+import { MODEL_REGISTRY, findModel, defaultsFor, compactParams, capabilitiesFor, estimateCost, validateParameters } from '../src/models/registry';
+import { ComposerControls } from '../src/ui/composer/Controls';
+import { routeProvider } from '../providers/routing';
+import { higgsfieldAdapter, safeHiggsfieldUrl } from '../providers/higgsfield';
+import { kieAdapter } from '../providers/kie';
+import { prepareKieInput } from '../providers/kie-input';
+import { mediaUrls } from '../providers/types';
+const soul = findModel('soul-2:text-to-image')!;
+assert.equal(new Set(MODEL_REGISTRY.map(m => m.logicalId)).size, MODEL_REGISTRY.length, 'Logical model IDs must be unique');
+assert.equal(estimateCost(soul, 'higgsfield', { resolution: '1080p', batch_size: 4 }).usd, 0.0228);
+assert.equal(estimateCost(findModel('soul-standard:text-to-image')!, 'higgsfield', {}).usd, null, 'Conflicting prices must remain unknown');
+assert.throws(() => validateParameters(soul, { batch_size: 3 }));
+assert.throws(() => validateParameters(soul, { seed: 0 }));
+assert.throws(() => validateParameters(soul, { enhance_prompt: 'true' }));
+assert.equal(capabilitiesFor(soul).modality, 'image');
+assert.deepEqual(compactParams(soul).map(p => p.key), ['aspect_ratio', 'resolution', 'batch_size']);
+const html = renderToStaticMarkup(React.createElement(ComposerControls, { model: soul, values: defaultsFor(soul), onChange: () => { }, onModels: () => { }, onMore: () => { }, policy: 'manual', onPolicy: () => { }, provider: 'higgsfield', onProvider: () => { } }));
+assert.match(html, /Resolution/);
+assert.match(html, /1080p/);
+assert.match(html, /Count/);
+assert.doesNotMatch(html, /Duration/);
+const kling = MODEL_REGISTRY.find(m => m.id === 'kling/2-5-turbo-image-to-video-pro')!;
+assert.equal(routeProvider(kling, {}, 'manual', 'higgsfield', ['kie', 'higgsfield'], ['kie', 'higgsfield']).provider, 'higgsfield');
+assert.throws(() => routeProvider(kling, {}, 'manual', 'higgsfield', ['kie'], ['kie', 'higgsfield']));
+assert.equal(routeProvider(kling, { image_urls: ['a', 'b'] }, 'auto', undefined, ['kie', 'higgsfield'], ['higgsfield', 'kie']).provider, 'kie');
+assert.equal(routeProvider(kling, {}, 'fastest', undefined, ['kie', 'higgsfield'], ['kie', 'higgsfield'], { kie: 20, higgsfield: 10 }).provider, 'higgsfield');
+const kieCost = estimateCost(kling, 'kie', { duration: '5' }).usd!;
+assert.equal(routeProvider(kling, { duration: '5' }, 'lowest-cost', undefined, ['kie', 'higgsfield'], ['kie', 'higgsfield']).provider, kieCost <= 0.35 ? 'kie' : 'higgsfield');
+const hf = higgsfieldAdapter(() => 'fixture:secret');
+const kie = kieAdapter(() => 'fixture');
+for (const [remote, expected] of Object.entries({ queued: 'queued', in_progress: 'running', completed: 'completed', failed: 'failed', nsfw: 'failed', canceled: 'canceled' }))
+    assert.equal(hf.normalize({ request_id: 'id', status: remote }).status, expected);
+assert.deepEqual(hf.normalize({ request_id: 'id', status: 'completed', video: { url: 'https://cdn.example/video.mp4' } }).outputs, ['https://cdn.example/video.mp4']);
+assert.deepEqual(mediaUrls({ images: [{ url: 'https://cdn.example/a.png' }, { url: 'https://cdn.example/b.png' }] }), ['https://cdn.example/a.png', 'https://cdn.example/b.png']);
+assert.throws(() => safeHiggsfieldUrl('https://attacker.example/status'));
+assert.throws(() => safeHiggsfieldUrl('https://user:pass@api.higgsfield.ai/status'));
+assert.equal(kie.normalize({ data: { state: 'fail', failMsg: 'failed' } }).status, 'failed');
+assert.equal(kie.normalize({ data: { successFlag: 1, resultUrls: ['https://cdn.example/a.mp4'] } }, { provider: 'kie', modelId: 'veo-3.1' }).status, 'completed');
+const veo = MODEL_REGISTRY.find(m => m.id === 'veo-3.1' && m.category === 'image-to-video')!;
+const veoInput = prepareKieInput(veo, { prompt: 'A scene', __sourceImage: 'https://example.com/a.jpg', seeds: 1 });
+assert.equal(veoInput.seeds, 10000);
+assert.deepEqual(veoInput.imageUrls, ['https://example.com/a.jpg']);
+assert.ok(!('__sourceImage' in veoInput));
+const originalFetch = globalThis.fetch;
+const calls: {
+    url: string;
+    options: any;
+}[] = [];
+globalThis.fetch = async (url, options) => { calls.push({ url: String(url), options }); return new Response(JSON.stringify({ request_id: 'fixture', status: 'queued', status_url: 'https://api.higgsfield.ai/requests/fixture/status', cancel_url: 'https://api.higgsfield.ai/requests/fixture/cancel' }), { status: 200 }); };
+try {
+    const result = await hf.submit(soul.mappings[0], { prompt: 'test', batch_size: 1 });
+    assert.equal(result.taskId, 'fixture');
+    assert.equal(calls[0].url, 'https://api.higgsfield.ai/higgsfield-ai/soul/v2/standard');
+    assert.equal(calls[0].options.headers.Authorization, 'Key fixture:secret');
+    await hf.poll(result, soul.mappings[0]);
+    assert.equal(calls[1].url, result.statusUrl);
+    globalThis.fetch = async () => new Response(null, { status: 202 });
+    await hf.cancel!(result);
+    globalThis.fetch = async () => new Response('{}', { status: 401 });
+    await assert.rejects(() => hf.submit(soul.mappings[0], {}), /401/);
+    globalThis.fetch = async (url, options) => { calls.push({ url: String(url), options }); return new Response(JSON.stringify({ code: 200, data: { taskId: 'kie-id' } })); };
+    await kie.submit({ provider: 'kie', modelId: 'veo/extend' }, { taskId: 'original', prompt: 'extend' });
+    assert.equal(calls.at(-1)!.url, 'https://api.kie.ai/api/v1/veo/extend');
+    assert.deepEqual(JSON.parse(calls.at(-1)!.options.body), { taskId: 'original', prompt: 'extend' });
+}
+finally {
+    globalThis.fetch = originalFetch;
+}
+console.log('Provider normalization, routing, schema controls, costs and submit contracts passed.');

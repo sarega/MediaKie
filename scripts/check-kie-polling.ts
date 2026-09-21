@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { pollKieTask } from '../src/lib/kieTaskPolling';
+import { isStaleGeneration } from '../src/generation/client';
 
 const originalFetch = globalThis.fetch;
 const jsonResponse = (body: unknown, status = 200) => new Response(JSON.stringify(body), {
@@ -8,6 +9,8 @@ const jsonResponse = (body: unknown, status = 200) => new Response(JSON.stringif
 });
 
 try {
+  assert.equal(isStaleGeneration('2026-01-01T00:00:00.000Z', Date.parse('2026-01-01T02:00:00.000Z')), true);
+  assert.equal(isStaleGeneration('2026-01-01T01:59:59.000Z', Date.parse('2026-01-01T02:00:00.000Z')), false);
   let calls = 0;
   let transientErrors = 0;
   globalThis.fetch = (async () => {

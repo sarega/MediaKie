@@ -1,7 +1,7 @@
 {
   "name": "kai-media-studio",
   "private": true,
-  "version": "1.4.0",
+  "version": "2.0.0",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -13,7 +13,11 @@
     "check:improvements": "npm run build && node scripts/check-improvements.mjs && npm run check:polling",
     "check:polling": "tsx scripts/check-kie-polling.ts",
     "check:credits": "tsx scripts/verify-credit-estimates.ts",
-    "check:catalog": "tsx scripts/check-kie-catalog.ts"
+    "check:catalog": "tsx scripts/check-kie-catalog.ts",
+    "check:providers": "node --import tsx scripts/check-providers.ts",
+    "check:generation": "node --import tsx scripts/check-generation.ts",
+    "test": "npm run check:providers && npm run check:generation && npm run check:polling && npm run check:credits && npm run check:catalog && npm run check:media",
+    "check:media": "node --import tsx scripts/check-media-workflows.ts"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

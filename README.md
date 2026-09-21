@@ -1,10 +1,31 @@
 # Kai Media Studio
 
-Kai Media Studio is a local web app for generating images and videos with Kie.ai models.
+Kai Media Studio is a local creative studio for generating images and videos through Kie.ai and Higgsfield, with provider routing and a shared model registry.
+
+## Creative studio update
+
+Navigation is now Home, Image, Video, Library, Projects and Settings. Create from a bottom composer with model search and contextual controls; open Parameters or Activity only when needed. The result inspector supports download, remix and compatible image-to-video/reference/edit/frame workflows.
+
+To animate a saved image: open **Library → Images → Animate → I2V**, choose a model from the filtered browser, describe the movement and Generate. **Use as reference** selects reference-to-video instead. You can also select the workflow in the composer and upload a starting image or first/last frames directly.
+
+Library supports image/video, status and text filters. Video posters are cached automatically using an existing `ffmpeg` installation (`FFMPEG_PATH` may override its location); browser frame loading is the fallback.
+
+Configure Kie.ai and Higgsfield under **Settings → Providers**, or set server environment variables. Higgsfield uses `HF_API_KEY_ID` plus `HF_API_KEY_SECRET` (or `HF_CREDENTIALS=key-id:key-secret`). Secrets are never returned by the settings API. Legacy browser Kie keys migrate to server storage on first successful load.
+
+See [Architecture and migration notes](docs/ARCHITECTURE.md) for adapters, registry, schemas, routing, queue recovery, cost semantics, verified API sources and how to add providers/models. Soul 2, Soul Standard and a shared Kling 2.5 Pro I2V route are enabled; Soul Cinema remains disabled pending verified API schema.
+
+```bash
+npm run lint
+npm test
+npm run build
+npm run check:improvements
+```
+
+The tests mock provider calls and do not generate paid media. Existing history and media remain in place. Back up `data/` before upgrading. New durable jobs/settings use additional JSON files in that directory; no SQL migration is necessary.
 
 ## Version
 
-Current version: `1.4.0`
+Current version: `2.0.0`
 
 ## What is included
 
@@ -14,7 +35,8 @@ Current version: `1.4.0`
 - Optional video autoplay setting
 - Credit counter refresh after reloads and completed generations
 - Project-based activity history
-- Use Case and Provider model browsing with search
+- Project management with rename, ZIP backup export, and confirmed clearing of project history and local media
+- Searchable model/workflow browser with vendor and API-provider metadata
 - Google Omni, Seedance, Kling, Veo, and Nano Banana model grouping labels
 - Simple video editor for assembling, trimming, splitting, previewing, and exporting generated clips
 - Reveal saved generated files in Finder directly from the result and Activity Log
@@ -69,7 +91,23 @@ npm run check:improvements
 
 ### Unreleased
 
+- No unreleased changes.
+
+### 2.0.0 — 2026-09-22
+
+- Added a shared provider adapter layer for Kie.ai and Higgsfield with normalized submission, polling, results, errors, health, cancellation and costs.
+- Added a provider-independent model registry, capability schemas and schema-driven controls for image, video, reference, frame and editing workflows.
+- Added provider routing policies for Auto, Manual, Lowest cost, Preferred and Fastest/preferred, with durable provider-neutral generation jobs and restart recovery.
+- Redesigned the app around Home, Image, Video, Library, Projects and Settings with a bottom generation composer and on-demand model, parameter and activity panels.
+- Separated new-creation pages from saved work: Image and Video now open in a clean Ready state, while prior generations stay in Library and Activity until explicitly inspected.
+- Added searchable workflow-aware model browsing and direct Image → Animate, Use as reference, first-frame and last-frame paths.
+- Added reliable local thumbnails and cached video posters, plus media, workflow, status and text filters.
+- Added per-item deletion, multi-select, filtered select-all, bulk deletion and selected-media ZIP export with a metadata manifest.
+- Added project rename, full backup export and confirmed project clearing while preserving media still referenced by remaining history.
+- Added stalled-job recovery, status rechecks and local stop-tracking controls so abandoned tasks no longer block the workspace.
+- Added secure multi-provider credential settings, provider connection state, priority, concurrency and spend-cap controls.
 - Added a Reveal in Finder action for generated media saved in the local project library.
+- Added provider, routing, cost, polling, media workflow, thumbnail and generation recovery checks.
 
 ### 1.4.0 — 2026-09-02
 

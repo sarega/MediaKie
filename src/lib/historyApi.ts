@@ -31,11 +31,23 @@ export const createHistoryApi = () => {
     }
   });
 
+  const deleteMany = (projectId: string, logIds: string[]) => enqueue(async () => {
+    const response = await fetch(url(`/api/projects/${encodeURIComponent(projectId)}/history/delete-many`), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ logIds }),
+    });
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error(data.error || 'Failed to remove selected items');
+    }
+  });
+
   const clear = (projectId: string) => enqueue(async () => {
     const response = await fetch(url(`/api/projects/${encodeURIComponent(projectId)}/history`), { method: 'DELETE' });
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(data.error || 'Failed to clear project');
   });
 
-  return { saveLog, deleteLog, clear };
+  return { saveLog, deleteLog, deleteMany, clear };
 };

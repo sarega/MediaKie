@@ -1,19 +1,28 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { AIModel, GenerationLog, ModelParamConfig, estimateModelCredits } from '../types';
-import { Sparkles, Upload, Download, FolderOpen, Loader2, Settings2, Wallet, Link2, Copy, Search, Check, Film, Scissors, Play, Pause, Trash2, StepBack, StepForward, PanelLeftOpen, PanelRightOpen } from 'lucide-react';
+import { AlertCircle, Sparkles, Upload, Download, FolderOpen, Loader2, Settings2, Wallet, Link2, Copy, Search, Check, Film, Scissors, Play, Pause, Trash2, StepBack, StepForward, PanelLeftOpen, PanelRightOpen } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
+import {WORKFLOWS,firstImageParameter,type Workflow} from '../models/workflows';
+import { ComposerControls } from '../ui/composer/Controls';
+import { resolveModel, parametersFor, type RoutingPolicy, type ProviderId } from '../models/registry';
+import { jsonRequest } from '../generation/client';
 import { ClypraEditorHost } from './ClypraEditorHost';
 
 const USE_CLYPRA_EDITOR = import.meta.env.VITE_USE_CLYPRA_EDITOR === 'true';
 
 interface Props {
+  workflow:Workflow;
+  onWorkflowChange:(workflow:Workflow)=>void;
+  onInspect?: () => void;
+  onStartNew?: () => void;
+  remix?: {id:string;prompt:string;settings:Record<string,any>} | null;
   selectedModel: AIModel;
   autoplayVideos: boolean;
   onGenerate: (prompt: string, imageBase64?: string, videoBase64?: string, params?: Record<string, any>) => void;
   isSubmitting: boolean;
   latestLog?: GenerationLog;
-  sourceAsset?: { id: string; type: 'image' | 'video'; url: string; label?: string } | null;
+  sourceAsset?: { id: string; type: 'image' | 'video'; url: string; label?: string; parameterKey?: string } | null;
   isCompactLayout?: boolean;
   onOpenModelPane?: () => void;
   onOpenActivityPane?: () => void;
@@ -48,7 +57,10 @@ const previewJsonValue = (value: any): any => {
 
 const isLocalLibraryUrl = (url: string) => url.startsWith('/library/') || url.startsWith('/projects/');
 
-export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSubmitting, latestLog, sourceAsset, isCompactLayout = false, onOpenModelPane, onOpenActivityPane, onRevealFile }: Props) {
+export function MediaWorkspace({ workflow,onWorkflowChange,onInspect, onStartNew, remix, selectedModel: baseModel, autoplayVideos, onGenerate, isSubmitting, latestLog, sourceAsset, isCompactLayout = false, onOpenModelPane, onOpenActivityPane, onRevealFile }: Props) {
+  const [policy,setPolicy] = useState<RoutingPolicy>('auto');
+  const [provider,setProvider] = useState('kie');
+  const selectedModel = useMemo(()=>({...baseModel,params:parametersFor(baseModel,policy==='manual'?provider as ProviderId:undefined)}),[baseModel,policy,provider]);
   const [workspaceMode, setWorkspaceMode] = useState<'create' | 'edit'>('create');
   const [prompt, setPrompt] = useState('');
   
@@ -57,7 +69,10 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
   
   // Custom Parameters
   const [paramValues, setParamValues] = useState<Record<string, any>>({});
-  const [showSettings, setShowSettings] = useState(true);
+  const [showSettings, setShowSettings] = useState(false);
+  const [providerRevision,setProviderRevision] = useState(0);
+  const [estimate,setEstimate] = useState<any>(null);
+  const [estimateError,setEstimateError] = useState('');
   const [settingsView, setSettingsView] = useState<'form' | 'json'>('form');
   const initializedModelRef = useRef('');
   const [openVoiceParamKey, setOpenVoiceParamKey] = useState<string | null>(null);
@@ -69,7 +84,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
   const [exportStatus, setExportStatus] = useState('');
 
   useEffect(() => {
-    if (!isCompactLayout || !showSettings) return;
+    if (!showSettings) return;
     const closeSettingsOnEscape = (event: KeyboardEvent) => {
       if (event.key === 'Escape') setShowSettings(false);
     };
@@ -77,6 +92,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
     return () => window.removeEventListener('keydown', closeSettingsOnEscape);
   }, [isCompactLayout, showSettings]);
 
+  useEffect(()=>{if(!sourceAsset)setFileData(null);},[sourceAsset]);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const previewVideoRef = useRef<HTMLVideoElement>(null);
   const exportCanvasRef = useRef<HTMLCanvasElement>(null);
@@ -95,7 +111,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
   });
 
   useEffect(() => {
-    const modelKey = `${selectedModel.category}:${selectedModel.id}`;
+    const modelKey = `${selectedModel.category}:${selectedModel.id}:${policy==='manual'?provider:'auto'}:${workflow}`;
     const storageKey = `kie_model_params:${modelKey}`;
 
     if (initializedModelRef.current !== modelKey) {
@@ -121,11 +137,11 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
 
   useEffect(() => {
     if (!sourceAsset) return;
+    if (sourceAsset.parameterKey) {setParamValues(current=>({...current,[sourceAsset.parameterKey!]:sourceAsset.url}));return;}
     const isSupported = sourceAsset.type === 'image'
       ? selectedModel.supportsImageUpload
       : selectedModel.supportsVideoUpload;
-    if (!isSupported) return;
-
+    if (!isSupported) {setFileData(null);return;}
     setFileData({
       type: sourceAsset.type,
       bgUrl: sourceAsset.url,
@@ -145,7 +161,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
     const imageB64 = fileData?.type === 'image' ? fileData.b64 : undefined;
     const videoB64 = fileData?.type === 'video' ? fileData.b64 : undefined;
     
-    onGenerate(prompt, imageB64, videoB64, paramValues);
+    onGenerate(prompt, imageB64, videoB64, {...paramValues,__policy:policy,__provider:provider,__sourceDuration:fileData?.duration});
   };
 
   const toBase64 = (file: File): Promise<string> => {
@@ -502,11 +518,18 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
   const isActiveLogGenerating = latestLog?.status === 'generating';
   const showFileOutput = !isActiveLogGenerating && latestLog?.status === 'success' && latestLog.mediaUrl;
   const showTextOutput = !isActiveLogGenerating && latestLog?.status === 'success' && latestLog.textResult;
-  const estimatedCredits = estimateModelCredits(selectedModel, paramValues, fileData?.type, fileData?.duration);
-  const estimatedUsd = estimatedCredits
-    ? (estimatedCredits * 0.005).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 4 })
-    : null;
-  const canSubmit = Boolean(prompt.trim() || fileData || selectedModel.allowsPromptlessGeneration);
+  useEffect(()=>{const refresh=()=>{jsonRequest('/api/providers').then(config=>{setPolicy(config.policy);setProvider(config.priority[0]);setProviderRevision(value=>value+1);}).catch(()=>{});};refresh();window.addEventListener('studio-providers-changed',refresh);return()=>window.removeEventListener('studio-providers-changed',refresh);},[]);
+  useEffect(()=>{const choices=resolveModel(selectedModel).mappings;if(!choices.some(p=>p.provider===provider) && choices[0])setProvider(choices[0].provider);},[selectedModel,provider]);
+  useEffect(()=>{if(remix){setPrompt(remix.prompt);setParamValues(current=>({...current,...remix.settings}));}},[remix]);
+  useEffect(()=>{
+    let canceled=false;setEstimate(null);
+    const timer=window.setTimeout(()=>{jsonRequest('/api/generation/estimate',{logicalModel:resolveModel(selectedModel).logicalId,input:paramValues,policy,provider,sourceType:fileData?.type,sourceDuration:fileData?.duration})
+      .then(value=>{if(!canceled){setEstimate(value);setEstimateError('');}}).catch(error=>{if(!canceled){setEstimate(null);setEstimateError(error.message);}});},200);
+    return ()=>{canceled=true;clearTimeout(timer);};
+  },[selectedModel,paramValues,policy,provider,fileData?.type,fileData?.duration,providerRevision]);
+  const estimatedCredits = estimate?.cost.credits;
+  const estimatedUsd = estimate?.cost.usd == null ? null : Number(estimate.cost.usd).toFixed(4);
+  const canSubmit = Boolean(estimate && (prompt.trim() || fileData || selectedModel.allowsPromptlessGeneration));
   const inputJson = JSON.stringify({ prompt, ...previewJsonValue(paramValues) }, null, 2);
   
   const renderOutput = () => {
@@ -514,7 +537,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
       return (
         <div className="flex flex-col items-center justify-center h-full text-indigo-400">
           <Loader2 className="w-10 h-10 animate-spin mb-4" />
-          <p className="font-medium">Generating your masterpiece...</p>
+          <p className="font-medium">{latestLog?.normalizedStatus==='queued'?'Queued — waiting for an available slot':'Creating your media…'}</p>
           <p className="text-xs text-neutral-500 mt-2">Using {latestLog?.modelName}</p>
         </div>
       );
@@ -595,10 +618,21 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
       );
     }
 
+    if (latestLog?.status === 'failed') {
+      return (
+        <div className="flex h-full flex-col items-center justify-center gap-3 p-6 text-center">
+          <AlertCircle className="h-10 w-10 text-amber-400" />
+          <p className="font-medium text-neutral-200">{latestLog.normalizedStatus === 'stalled' ? 'Generation stalled' : latestLog.normalizedStatus === 'canceled' ? 'Tracking stopped' : 'Generation failed'}</p>
+          <p className="max-w-md text-sm text-neutral-500">{latestLog.error || 'The provider did not return a result.'}</p>
+          {latestLog.pollingState === 'timed-out' && <button onClick={onOpenActivityPane} className="rounded-lg bg-violet-500/15 px-4 py-2 text-sm text-violet-200 hover:bg-violet-500/25">Open Activity to check or stop</button>}
+        </div>
+      );
+    }
+
     return (
-      <div className="flex flex-col items-center justify-center h-full text-neutral-600 space-y-4">
-        <Sparkles className="w-16 h-16 opacity-20" />
-        <p className="text-sm uppercase tracking-widest opacity-60">Ready to create</p>
+      <div className="flex flex-col items-center justify-center h-full text-neutral-400 space-y-4 p-4 text-center">
+        <Sparkles className="w-12 h-12 text-violet-400/60" />
+        <p className="text-sm tracking-wide">Ready to create</p><p className="text-xs text-neutral-500">Start with a prompt. Your results stay in this workspace.</p>
       </div>
     );
   };
@@ -789,9 +823,9 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
     <div className="flex flex-col h-full bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-neutral-900 to-neutral-950">
       
       {/* Header */}
-      <div className="flex shrink-0 items-center justify-between gap-3 border-b border-neutral-800/50 px-4 py-3 sm:px-6 sm:py-4 z-10">
+      <div className="flex shrink-0 items-center justify-between flex-wrap gap-3 border-b border-neutral-800/50 px-4 py-3 sm:px-6 sm:py-4 z-10">
         <div className="flex min-w-0 items-start gap-2">
-          {isCompactLayout && (
+          {(
             <div className="flex shrink-0 items-center gap-1">
               <button
                 type="button"
@@ -814,7 +848,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
             </div>
           )}
           <div className="min-w-0">
-          <h2 className="mb-1 max-w-[48vw] text-xl font-semibold tracking-tight text-neutral-100 sm:max-w-none sm:text-2xl">
+          <h2 className="mb-1 max-w-[48vw] text-base sm:text-xl font-semibold tracking-tight text-neutral-100 sm:max-w-none sm:text-2xl">
             {workspaceMode === 'edit' ? (USE_CLYPRA_EDITOR ? 'Clypra Editor' : 'Video Editor') : selectedModel.name}
           </h2>
           <p className="hidden text-neutral-400 font-mono text-xs sm:block">
@@ -827,11 +861,13 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {latestLog && <button onClick={onStartNew} className="rounded-lg border border-neutral-800 px-3 py-2 text-sm text-neutral-300 hover:bg-neutral-800">New creation</button>}
+          {latestLog?.mediaUrl && <button onClick={onInspect} className="text-sm text-violet-300 px-2">Inspect result</button>}
           {workspaceMode === 'create' && selectedModel.params && selectedModel.params.length > 0 && (
             <button
               onClick={() => setShowSettings(!showSettings)}
               className={cn(
-                "flex items-center gap-2 px-3 py-1.5 rounded text-sm transition-colors border",
+                "hidden sm:flex items-center gap-2 px-3 py-1.5 rounded text-sm transition-colors border",
                 showSettings
                   ? "bg-neutral-800 text-neutral-100 border-neutral-700"
                   : "bg-transparent text-neutral-400 border-transparent hover:bg-neutral-800/50 hover:text-neutral-200"
@@ -892,7 +928,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
         <AnimatePresence>
           {workspaceMode === 'create' && showSettings && selectedModel.params && (
             <>
-              {isCompactLayout && (
+              {(
                 <button
                   type="button"
                   onClick={() => setShowSettings(false)}
@@ -906,14 +942,14 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
                 exit={{ width: 0, opacity: 0 }}
                 className={cn(
                   'flex h-full min-h-0 flex-col overflow-hidden border-l border-neutral-800/80 bg-neutral-900/90 backdrop-blur',
-                  isCompactLayout ? 'absolute inset-y-0 right-0 z-20 shadow-2xl' : 'relative shrink-0 bg-neutral-900/60'
+                  'absolute inset-y-0 right-0 z-30 shadow-2xl'
                 )}
               >
               <div
                 className={cn('flex h-full min-h-0 flex-col p-4', isCompactLayout ? 'w-full' : 'w-[300px]')}
               >
                 <div className="mb-4 flex shrink-0 items-center justify-between gap-3">
-                  <h3 className="text-xs font-semibold uppercase tracking-wider text-neutral-400">Model Parameters</h3>
+                  <button onClick={()=>setShowSettings(false)} aria-label="Close parameters" className="text-xs text-neutral-400">✕ Parameters</button>
                   <div className="grid grid-cols-2 gap-1 rounded-md border border-neutral-800 bg-neutral-950 p-1">
                     <button
                       type="button"
@@ -1189,11 +1225,13 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
       </div>
 
       {/* 3. Input Controls Base (Fixed at bottom) */}
-      {workspaceMode === 'create' && <div className="relative z-20 w-full shrink-0 px-4 pb-4 pt-0">
+      {workspaceMode === 'create' && <div className="relative z-20 w-full shrink-0 max-h-[60vh] overflow-y-auto px-3 sm:px-4 pb-4 pt-0">
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-3 rounded-2xl border border-neutral-800/80 bg-neutral-900/90 p-3 shadow-2xl backdrop-blur-xl">
           
+          <div className="flex flex-wrap items-center gap-3"><label className="text-xs text-neutral-400">Workflow <select aria-label="Generation workflow" value={workflow} onChange={e=>onWorkflowChange(e.target.value as Workflow)} className="ml-2 rounded-lg border border-violet-500/30 bg-neutral-950 px-3 py-2 text-violet-200">{WORKFLOWS.filter(w=>w.id!=='all'&&(w.modality==='all'||w.modality===(selectedModel.category.includes('video')?'video':'image'))).map(w=><option key={w.id} value={w.id}>{w.label}</option>)}</select></label><span className="text-xs text-neutral-500">{WORKFLOWS.find(w=>w.id===workflow)?.hint}</span></div>
+          {!['text-to-video','text-to-image'].includes(workflow) && (selectedModel.params||[]).filter(p=>p.type==='file'&&p.accept?.includes('image')&&(/reference|first_frame|last_frame|start_frame|end_frame/.test(p.key))).length>0 && <div className="flex gap-3 overflow-x-auto py-1">{(selectedModel.params||[]).filter(p=>p.type==='file'&&p.accept?.includes('image')&&(/reference|first_frame|last_frame|start_frame|end_frame/.test(p.key))).map(param=><div key={param.key} className="shrink-0 rounded-lg border border-neutral-700 p-2 min-w-32"><label className="text-xs text-neutral-300 block">{param.name}<input aria-label={`Upload ${param.name}`} className="block max-w-48 mt-2 text-[10px]" type="file" accept={param.accept} multiple={param.multiple} onChange={async e=>{const files=Array.from(e.target.files||[]);appendParamFiles(param,await Promise.all(files.map(toBase64)));e.target.value='';}}/></label><div className="flex gap-1 mt-2">{valuesAsArray(paramValues[param.key]).map((url,index)=><button key={index} onClick={()=>removeParamFile(param,index)} aria-label={`Remove ${param.name} ${index+1}`} title="Remove image"><img src={String(url)} alt={param.name} className="w-14 h-12 object-cover rounded"/></button>)}</div></div>)}</div>}
           <div className="flex min-w-0 flex-1 flex-col gap-3 lg:flex-row lg:items-end">
-            {(selectedModel.supportsImageUpload || selectedModel.supportsVideoUpload) && (
+            {!['text-to-video','text-to-image'].includes(workflow) && (selectedModel.supportsImageUpload || selectedModel.supportsVideoUpload) && !firstImageParameter(selectedModel,workflow) && (
               <div
                 className="flex shrink-0 flex-wrap gap-2 rounded-xl"
                 onDragOver={(e) => {
@@ -1224,7 +1262,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
                   className="group flex h-16 w-20 flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-neutral-700 text-neutral-400 transition-all hover:border-neutral-500 hover:bg-neutral-800"
                 >
                   <Upload className="w-5 h-5 group-hover:-translate-y-1 transition-transform" />
-                  <span className="text-xs font-medium text-center leading-tight">Upload or Drop</span>
+                  <span className="text-xs font-medium text-center leading-tight">{workflow==='image-to-video'?'Add starting image':workflow==='reference'?'Add reference':selectedModel.supportsVideoUpload&&!selectedModel.supportsImageUpload?'Add video':'Add image'}</span>
                 </button>
                 <input
                   type="file"
@@ -1236,8 +1274,8 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
               </div>
             )}
 
-            <div className="flex min-w-0 flex-1 items-end gap-3">
-            <div className="flex-1 min-h-[60px] relative rounded-xl border border-neutral-700/50 bg-neutral-950 flex focus-within:ring-2 ring-indigo-500/50 focus-within:border-indigo-500/50 transition-all">
+            <div className="flex min-w-0 flex-1 flex-col sm:flex-row items-stretch sm:items-end gap-3">
+            <div className="w-full flex-1 min-h-[60px] relative rounded-xl border border-neutral-700/50 bg-neutral-950 flex focus-within:ring-2 ring-indigo-500/50 focus-within:border-indigo-500/50 transition-all">
               <textarea
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
@@ -1256,7 +1294,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
               onClick={handleGenerate}
               disabled={isSubmitting || !canSubmit}
               className={cn(
-                "flex h-14 shrink-0 items-center gap-2 rounded-xl px-6 font-medium shadow-lg transition-all",
+                "flex h-12 sm:h-14 shrink-0 justify-center items-center gap-2 rounded-xl px-4 sm:px-6 font-medium shadow-lg transition-all",
                 isSubmitting
                   ? "bg-indigo-500/50 text-white cursor-not-allowed" 
                   : "bg-indigo-500 hover:bg-indigo-400 text-white"
@@ -1277,12 +1315,13 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
             </button>
             </div>
           </div>
-          {estimatedCredits ? (
+          <ComposerControls model={selectedModel} values={paramValues} onChange={(key,value)=>setParamValues(current=>({...current,[key]:value}))} onModels={()=>onOpenModelPane?.()} onMore={()=>setShowSettings(true)} policy={policy} onPolicy={setPolicy} provider={provider} onProvider={setProvider}/>
+          {estimate && estimatedUsd !== null ? (
             <div className="flex items-center justify-end gap-2 text-xs text-neutral-400">
               <Wallet className="w-3.5 h-3.5 text-emerald-400" />
               <span>
-                Estimated generation cost: <span className="font-semibold text-neutral-200">{estimatedCredits} credits</span>
-                {estimatedUsd && <span> (~${estimatedUsd})</span>}
+                Estimated · {estimate.provider}: <span className="font-semibold text-neutral-200">${estimatedUsd}{estimatedCredits != null ? ` · ${estimatedCredits} credits` : ''}</span>
+                <span> · Final cost reported separately</span>
                 {fileData?.type === 'video' && fileData.duration && selectedModel.creditEstimator?.billsSourceVideoDuration && (
                   <span> (includes {formatSeconds(fileData.duration)} source)</span>
                 )}
@@ -1294,7 +1333,7 @@ export function MediaWorkspace({ selectedModel, autoplayVideos, onGenerate, isSu
           ) : (
             <div className="flex items-center justify-end gap-2 text-xs text-amber-400/80">
               <Wallet className="w-3.5 h-3.5" />
-              <span>Kie pricing is pending verification for this model.</span>
+              <span>{estimateError || estimate?.cost.source || 'Checking estimated cost…'}</span>
             </div>
           )}
         </div>
