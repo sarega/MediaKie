@@ -9,6 +9,7 @@ import {primaryWorkflow,supportsWorkflow,firstImageParameter} from '../src/model
 import {thumbnailUrl} from '../src/components/MediaThumbnail';
 import {createThumbnailer} from '../providers/thumbnails';
 import {prepareKieInput} from '../providers/kie-input';
+import {favoriteModels,modelKey,rememberSelection,savedSelection,toggleFavoriteModel} from '../src/models/preferences';
 const get=(id:string)=>MODEL_REGISTRY.find(m=>m.id===id)!;
 assert.equal(primaryWorkflow(get('veo/extend')),'extend');
 assert.equal(supportsWorkflow(get('veo/extend'),'text-to-video'),false);
@@ -23,6 +24,14 @@ assert.doesNotThrow(()=>prepareKieInput(frames,{prompt:'test',first_frame_url:'h
 assert.equal(thumbnailUrl('/library/a.mp4','video'),'/api/media/thumbnail?url=%2Flibrary%2Fa.mp4');
 assert.equal(thumbnailUrl('https://example.com/a.mp4','video'),null);
 assert.equal(thumbnailUrl('/library/a.png','image'),null);
+const memory=new Map<string,string>();
+const storage={getItem:(key:string)=>memory.get(key)||null,setItem:(key:string,value:string)=>{memory.set(key,value);}};
+rememberSelection(storage,'project-a','video',{modelKey:modelKey(get('minimax-h3/text-to-video')),workflow:'text-to-video'});
+assert.equal(savedSelection(storage,'project-a','video')?.modelKey,'text-to-video:minimax-h3/text-to-video');
+assert.equal(savedSelection(storage,'project-b','video'),undefined,'Projects must not share their last model');
+assert.ok(toggleFavoriteModel(storage,'text-to-video:minimax-h3/text-to-video').has('text-to-video:minimax-h3/text-to-video'));
+assert.ok(favoriteModels(storage).has('text-to-video:minimax-h3/text-to-video'));
+assert.equal(toggleFavoriteModel(storage,'text-to-video:minimax-h3/text-to-video').size,0);
 const run=promisify(execFile);
 const binary=process.env.FFMPEG_PATH||await fs.access('/opt/homebrew/bin/ffmpeg').then(()=>'/opt/homebrew/bin/ffmpeg').catch(()=>'ffmpeg');
 const directory=await fs.mkdtemp(path.join(os.tmpdir(),'studio-thumbnails-'));

@@ -14,6 +14,7 @@ import { isStaleGeneration, jsonRequest, pollGeneration } from './generation/cli
 import {LibraryGallery} from './components/LibraryGallery';
 import {WORKFLOWS,primaryWorkflow,supportsWorkflow,firstImageParameter,type Workflow} from './models/workflows';
 import { ModelBrowser } from './ui/drawers/ModelBrowser';
+import {modelKey,rememberSelection,savedSelection,sectionForModel,type StudioSection} from './models/preferences';
 import type { AppTheme } from './types';
 import { createHistoryApi } from './lib/historyApi';
 import { pollKieTask } from './lib/kieTaskPolling';
@@ -174,10 +175,33 @@ export default function App() {
   const activeLog = logs.find((log) => log.id === activeLogId);
   const hasGeneratingLogs = logs.some((log) => log.status === 'generating');
   const projectApiUrl = (path: string) => new URL(path, window.location.origin).toString();
+  const findSavedSelection = (projectId:string,section:StudioSection) => {
+    const saved=savedSelection(localStorage,projectId,section);
+    if(!saved)return null;
+    const model=SUPPORTED_MODELS.find(item=>modelKey(item)===saved.modelKey&&!item.unavailableReason);
+    return model&&sectionForModel(model)===section&&supportsWorkflow(model,saved.workflow)?{model,workflow:saved.workflow}:null;
+  };
+  const selectModel = (model:AIModel,nextWorkflow=primaryWorkflow(model)) => {
+    setSelectedModel(model);setWorkflow(nextWorkflow);
+    if(currentProjectId)rememberSelection(localStorage,currentProjectId,sectionForModel(model),{modelKey:modelKey(model),workflow:nextWorkflow});
+  };
+  const openCreationSection = (section:StudioSection) => {
+    const saved=currentProjectId?findSavedSelection(currentProjectId,section):null;
+    const fallback=SUPPORTED_MODELS.find(model=>sectionForModel(model)===section&&!model.unavailableReason);
+    const choice=saved||fallback&&{model:fallback,workflow:primaryWorkflow(fallback)};
+    setPage(section[0].toUpperCase()+section.slice(1));setActiveLogId(null);setSourceAsset(null);
+    if(choice)selectModel(choice.model,choice.workflow);
+  };
 
   useEffect(() => {
     currentProjectIdRef.current = currentProjectId;
   }, [currentProjectId]);
+
+  useEffect(()=>{
+    if(!currentProjectId||!['Image','Video','Audio'].includes(page))return;
+    const saved=findSavedSelection(currentProjectId,page.toLowerCase() as StudioSection);
+    if(saved){setSelectedModel(saved.model);setWorkflow(saved.workflow);}
+  },[currentProjectId]);
 
   useEffect(() => {
     const mediaQuery = window.matchMedia('(max-width: 900px)');
@@ -506,7 +530,7 @@ export default function App() {
   };
 
   const useAsSource = (asset: { type: 'image' | 'video'; url: string; label?: string }) => {
-    if (asset.type==='image' && !selectedModel.supportsImageUpload) {const candidate=SUPPORTED_MODELS.find(m=>m.category==='image-to-image'&&m.supportsImageUpload);if(candidate){setSelectedModel(candidate);setWorkflow(primaryWorkflow(candidate));}}
+    if (asset.type==='image' && !selectedModel.supportsImageUpload) {const candidate=SUPPORTED_MODELS.find(m=>m.category==='image-to-image'&&m.supportsImageUpload);if(candidate)selectModel(candidate);}
     setPage(asset.type==='video'?'Video':selectedModel.category.includes('video')?'Video':'Image');
     setSourceAsset({ ...asset, id: crypto.randomUUID() });
     setRightPaneOpen(false);
@@ -1036,7 +1060,7 @@ export default function App() {
     const candidates=SUPPORTED_MODELS.filter(m=>supportsWorkflow(m,next)&&!m.unavailableReason&&(next!=='tools'||m.category.includes('video')===selectedModel.category.includes('video')));
     const candidate=candidates.find(m=>m.familyId&&m.familyId===selectedModel.familyId)||candidates.find(m=>m.provider===selectedModel.provider)||candidates[0];
     setWorkflow(next);
-    if(candidate){setSelectedModel(candidate);setPage(candidate.category.includes('video')?'Video':'Image');}
+    if(candidate){selectModel(candidate,next);setPage(candidate.category==='text-to-audio'?'Audio':candidate.category.includes('video')?'Video':'Image');}
     if(next==='text-to-video'||next==='text-to-image')setSourceAsset(null);
     else if(candidate&&sourceAsset?.type==='image')setSourceAsset({...sourceAsset,id:crypto.randomUUID(),parameterKey:firstImageParameter(candidate,next)?.key});
     if(openBrowser)openPane('left');
@@ -1045,7 +1069,7 @@ export default function App() {
     const next:Workflow=asReference?'reference':'image-to-video';
     const candidate=SUPPORTED_MODELS.find(m=>supportsWorkflow(m,next)&&!m.unavailableReason&&(m.supportsImageUpload||firstImageParameter(m,next)));
     if(!candidate || !log.mediaUrl)return;
-    setSelectedModel(candidate);setWorkflow(next);setPage('Video');setActiveLogId(null);
+    selectModel(candidate,next);setPage('Video');setActiveLogId(null);
     setSourceAsset({id:crypto.randomUUID(),type:'image',url:log.mediaUrl,label:asReference?'Reference image':'Starting image',parameterKey:firstImageParameter(candidate,next)?.key});
     setInspected(null);setLeftPaneOpen(true);
   };
@@ -1055,8 +1079,7 @@ export default function App() {
         <div className="px-2 py-5 font-semibold text-violet-300"><span className="sm:hidden">Kai</span><span className="hidden sm:inline">Kai Media Studio</span></div>
         <nav className="flex flex-col gap-2">{['Home','Image','Video','Audio','Library','Projects','Settings'].map(item => <button key={item} onClick={() => {
           if(item === 'Settings') {setShowSettings(true);return;}
-          setPage(item);
-          if(item === 'Image' || item === 'Video' || item === 'Audio') {setActiveLogId(null);const category=item==='Image'?'text-to-image':item==='Video'?'text-to-video':'text-to-audio';const match=SUPPORTED_MODELS.find(m=>m.category===category);if(match){setSelectedModel(match);setWorkflow(primaryWorkflow(match));setSourceAsset(null);}}
+          if(item === 'Image' || item === 'Video' || item === 'Audio')openCreationSection(item.toLowerCase() as StudioSection);else setPage(item);
         }} className={`text-left rounded-xl px-2 sm:px-3 py-3 text-xs sm:text-sm ${page===item ? 'bg-violet-500/15 text-violet-300':'text-neutral-400 hover:bg-neutral-800'}`}>{item}</button>)}</nav>
         <div className="mt-auto space-y-2">
           <button type="button" onClick={fetchCredits} title={creditError || 'Refresh Kie credit balance'} aria-label="Refresh Kie credit balance" className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-xs text-neutral-400 hover:bg-neutral-800 hover:text-neutral-200">
@@ -1067,12 +1090,12 @@ export default function App() {
           <div className="hidden p-2 text-xs text-neutral-500 sm:block">{currentProject?.name || 'Creative workspace'}</div>
         </div>
       </aside>
-      {leftPaneOpen && <ModelBrowser modality={page === 'Image' ? 'image' : page === 'Video' ? 'video' : page === 'Audio' ? 'audio' : undefined} initialWorkflow={workflow} hasReference={!!sourceAsset} onClose={()=>closePane('left')} onSelect={(model,nextWorkflow)=>{setSelectedModel(model);setWorkflow(nextWorkflow);setPage(model.category==='text-to-audio'?'Audio':model.category.includes('video')?'Video':'Image');if(sourceAsset?.type==='image'){const param=firstImageParameter(model,nextWorkflow);setSourceAsset({...sourceAsset,id:crypto.randomUUID(),parameterKey:param?.key});}closePane('left');}}/>}
+      {leftPaneOpen && <ModelBrowser modality={page === 'Image' ? 'image' : page === 'Video' ? 'video' : page === 'Audio' ? 'audio' : undefined} initialWorkflow={workflow} hasReference={!!sourceAsset} onClose={()=>closePane('left')} onSelect={(model,nextWorkflow)=>{selectModel(model,nextWorkflow);setPage(model.category==='text-to-audio'?'Audio':model.category.includes('video')?'Video':'Image');if(sourceAsset?.type==='image'){const param=firstImageParameter(model,nextWorkflow);setSourceAsset({...sourceAsset,id:crypto.randomUUID(),parameterKey:param?.key});}closePane('left');}}/>}
       {/* Main Workspace */}
       <div className="flex-1 flex flex-col min-w-0 bg-neutral-950 relative">
         {['Home','Library','Projects'].includes(page) ? <div className="overflow-y-auto flex-1 p-5 sm:p-10">
           <div className="flex items-center justify-between mb-8"><h1 className="text-2xl font-semibold">{page === 'Home' ? 'What will you create today?' : page}</h1><button className="text-sm text-neutral-400" onClick={()=>openPane('right')}>Activity · {logs.filter(l=>l.status==='generating').length}</button></div>
-          {page === 'Home' && <div className="grid sm:grid-cols-3 gap-4 mb-10">{['Image','Video','Audio'].map(item=><button key={item} className="text-left p-7 rounded-2xl border border-violet-500/20 bg-gradient-to-br from-violet-500/15 to-neutral-900" onClick={()=>{setPage(item);setActiveLogId(null);const category=item==='Image'?'text-to-image':item==='Video'?'text-to-video':'text-to-audio';const model=SUPPORTED_MODELS.find(m=>m.category===category);if(model){setSelectedModel(model);setWorkflow(primaryWorkflow(model));setSourceAsset(null);}}}><h2 className="text-xl">Create {item}</h2><p className="text-sm text-neutral-400 mt-2">{item==='Image'?'Explore a visual idea, edit or build a reference.':item==='Video'?'Bring a scene or still image to life.':'Turn a script into directed speech.'}</p></button>)}</div>}
+          {page === 'Home' && <div className="grid sm:grid-cols-3 gap-4 mb-10">{(['Image','Video','Audio'] as const).map(item=><button key={item} className="text-left p-7 rounded-2xl border border-violet-500/20 bg-gradient-to-br from-violet-500/15 to-neutral-900" onClick={()=>openCreationSection(item.toLowerCase() as StudioSection)}><h2 className="text-xl">Create {item}</h2><p className="text-sm text-neutral-400 mt-2">{item==='Image'?'Explore a visual idea, edit or build a reference.':item==='Video'?'Bring a scene or still image to life.':'Turn a script into directed speech.'}</p></button>)}</div>}
           {page === 'Home' && <section className="mb-8"><div className="flex justify-between mb-3"><h2 className="text-neutral-300">Your projects</h2><button className="text-violet-300 text-sm" onClick={()=>setProjectDialog({mode:'create',name:'New project'})}>+ New project</button></div><div className="flex gap-3 flex-wrap">{projects.map(p=><button key={p.id} className={`rounded-lg border px-4 py-3 text-sm ${p.id===currentProjectId?'border-violet-500 text-violet-200':'border-neutral-800'}`} onClick={()=>setCurrentProjectId(p.id)}>{p.name}</button>)}</div></section>}
           {page === 'Projects' && <section><div className="flex items-center justify-between gap-4 mb-5"><div><h2 className="text-lg text-neutral-200">Project backups</h2><p className="text-sm text-neutral-500 mt-1">Export before clearing to keep the project history and original media together.</p></div><button className="rounded-lg bg-violet-500 px-4 py-2 text-sm font-medium text-white hover:bg-violet-400" onClick={()=>setProjectDialog({mode:'create',name:'New project'})}>+ New project</button></div><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{projects.map(project=><article key={project.id} className={`rounded-xl border p-5 ${project.id===currentProjectId?'border-violet-500/70 bg-violet-500/5':'border-neutral-800 bg-neutral-900'}`}><div className="mb-5"><h3 className="font-medium text-neutral-100">{project.name}</h3><p className="mt-1 text-xs text-neutral-500">Updated {new Date(project.updatedAt).toLocaleString()}</p>{project.id===currentProjectId&&<span className="mt-3 inline-block rounded-full bg-violet-500/15 px-2 py-1 text-xs text-violet-300">Open now</span>}</div><div className="grid grid-cols-2 gap-2"><button className="rounded-lg border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-800" onClick={()=>setCurrentProjectId(project.id)}>Open</button><button className="rounded-lg border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-800" onClick={()=>setProjectDialog({mode:'rename',name:project.name,projectId:project.id})}><Edit3 className="mr-2 inline h-3.5 w-3.5"/>Rename</button><button className="rounded-lg bg-violet-500/15 px-3 py-2 text-sm text-violet-200 hover:bg-violet-500/25" onClick={()=>handleExportProject(project)}><Download className="mr-2 inline h-3.5 w-3.5"/>Export backup</button><button className="rounded-lg border border-red-500/30 px-3 py-2 text-sm text-red-300 hover:bg-red-500/10" onClick={()=>handleClearProject(project)}><Trash2 className="mr-2 inline h-3.5 w-3.5"/>Clear</button></div></article>)}</div></section>}
           {page !== 'Projects' && <><h2 className="mb-4 text-neutral-300">{page==='Library'?'Project library':'Recent generations'}</h2><LibraryGallery logs={logs} onInspect={log=>{setActiveLogId(log.id);setInspected(log);}} onAnimate={log=>animateImage(log)} onReference={log=>animateImage(log,true)} onDelete={handleDeleteLogs} onExport={handleExportLogs}/></>}
@@ -1190,7 +1213,7 @@ export default function App() {
                 logs={logs}
                 activeLogId={activeLog?.id}
                 autoplayVideos={autoplayVideos}
-                onSelectLog={id=>{setActiveLogId(id);const log=logs.find(l=>l.id===id);setPage(log?.type==='video'?'Video':'Image');setRightPaneOpen(false);}}
+                onSelectLog={id=>{setActiveLogId(id);const log=logs.find(l=>l.id===id);setPage(log?.type==='video'?'Video':log?.type==='audio'?'Audio':'Image');setRightPaneOpen(false);}}
                 onUseAsSource={useAsSource}
                 onGrabVideoFrame={handleGrabVideoFrame}
                 onRevealFile={handleRevealFile}
@@ -1266,11 +1289,11 @@ export default function App() {
         <p className="text-sm text-neutral-400 my-3">{inspected.prompt}</p>
         <div className="flex gap-3 flex-wrap text-sm">
           {inspected.mediaUrl && <a className="px-3 py-2 rounded bg-neutral-800" href={`/api/download?url=${encodeURIComponent(inspected.mediaUrl)}&filename=${inspected.id}.${inspected.type==='video'?'mp4':inspected.type==='audio'?'mp3':'png'}`}>Download</a>}
-          <button className="px-3 py-2 rounded bg-neutral-800" onClick={()=>{const m=SUPPORTED_MODELS.find(m=>m.id===inspected.modelId);if(m){setSelectedModel(m);setWorkflow(primaryWorkflow(m));}setPage(inspected.type==='video'?'Video':inspected.type==='audio'?'Audio':'Image');setRemix({id:crypto.randomUUID(),prompt:inspected.prompt,settings:inspected.settingsSnapshot || {}});setInspected(null);}}>Remix</button>
+          <button className="px-3 py-2 rounded bg-neutral-800" onClick={()=>{const m=SUPPORTED_MODELS.find(m=>m.id===inspected.modelId);if(m)selectModel(m);setPage(inspected.type==='video'?'Video':inspected.type==='audio'?'Audio':'Image');setRemix({id:crypto.randomUUID(),prompt:inspected.prompt,settings:inspected.settingsSnapshot || {}});setInspected(null);}}>Remix</button>
           {inspected.mediaUrl && inspected.type==='image' && ['Use as Reference','Edit','Animate','Use as First Frame','Use as Last Frame','Upscale'].map(action=>{
             const candidate=SUPPORTED_MODELS.find(m=>action==='Upscale'? /upscale/i.test(m.name):action==='Use as Last Frame'? (m.params || []).some(p=>/last_frame|end_frame|tail_image/.test(p.key)):action==='Animate'||action==='Use as First Frame'?m.category==='image-to-video'&&m.supportsImageUpload:m.category==='image-to-image'&&m.supportsImageUpload);
             if(!candidate)return null;
-            return <button key={action} className="px-3 py-2 rounded bg-violet-500/20 text-violet-200" onClick={()=>{if(action==='Animate'){animateImage(inspected);return;}if(action==='Use as Reference'){animateImage(inspected,true);return;}setSelectedModel(candidate);setWorkflow(action==='Use as Last Frame'?'frames':primaryWorkflow(candidate));setPage(candidate.category.includes('video')?'Video':'Image');setSourceAsset({id:crypto.randomUUID(),type:'image',url:inspected.mediaUrl!,label:action,...(action==='Use as Last Frame'?{parameterKey:candidate.params?.find(p=>/last_frame|end_frame|tail_image/.test(p.key))?.key}:{})});setInspected(null);}}>{action}</button>;
+            return <button key={action} className="px-3 py-2 rounded bg-violet-500/20 text-violet-200" onClick={()=>{if(action==='Animate'){animateImage(inspected);return;}if(action==='Use as Reference'){animateImage(inspected,true);return;}selectModel(candidate,action==='Use as Last Frame'?'frames':primaryWorkflow(candidate));setPage(candidate.category.includes('video')?'Video':'Image');setSourceAsset({id:crypto.randomUUID(),type:'image',url:inspected.mediaUrl!,label:action,...(action==='Use as Last Frame'?{parameterKey:candidate.params?.find(p=>/last_frame|end_frame|tail_image/.test(p.key))?.key}:{})});setInspected(null);}}>{action}</button>;
           })}
         </div>
       </div>}

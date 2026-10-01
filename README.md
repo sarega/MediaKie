@@ -25,13 +25,14 @@ The tests mock provider calls and do not generate paid media. Existing history a
 
 ## Version
 
-Current version: `2.1.0`
+Current version: `2.2.0`
 
 ## What is included
 
 - Text-to-image, image-to-image, text-to-video, image-to-video, video-to-video and text-to-speech workspaces
 - Kie API key setup from `.env.local` or the in-app settings panel
-- Model and parameter settings that stay saved after reload
+- Project-specific last-used models and workflows for Image, Video, and Audio
+- Favorite models with star controls and a Favorites filter in the model browser
 - Optional video autoplay setting
 - Credit counter refresh after reloads and completed generations
 - Project-based activity history
@@ -101,6 +102,11 @@ npm run check:improvements
 ```
 
 ## Update log
+
+### 2.2.0 — 2026-10-02
+
+- Remembered the last model and workflow independently for each project and each Image, Video, and Audio workspace.
+- Added starred favorite models, a Favorites-only filter, and favorite-first model sorting.
 
 ### 2.1.0 — 2026-10-01
 
