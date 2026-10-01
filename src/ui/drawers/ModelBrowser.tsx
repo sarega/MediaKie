@@ -7,7 +7,7 @@ export function ModelBrowser({onSelect,onClose,modality,initialWorkflow='all',ha
  const [vendor,setVendor]=useState('all');
  const [workflow,setWorkflow]=useState<Workflow>(initialWorkflow);
  const choices=WORKFLOWS.filter(w=>w.modality==='all'||!modality||w.modality===modality);
- const inModality=MODEL_REGISTRY.filter(m=>!modality||(modality==='video'?m.category.includes('video'):!m.category.includes('video')));
+ const inModality=MODEL_REGISTRY.filter(m=>!modality||(modality==='video'?m.category.includes('video'):modality==='audio'?m.category==='text-to-audio':!m.category.includes('video')&&m.category!=='text-to-audio'));
  const vendors=[...new Set(inModality.map(m=>m.provider))].sort();
  const models=inModality.filter(m=>supportsWorkflow(m,workflow)&&(provider==='all'||m.mappings.some(p=>p.provider===provider))&&(vendor==='all'||m.provider===vendor)&&`${m.name} ${m.familyName} ${m.provider} ${m.category} ${WORKFLOWS.find(w=>w.id===primaryWorkflow(m))?.label} ${m.mappings.map(p=>p.provider).join(' ')}`.toLowerCase().includes(query.toLowerCase())).sort((a,b)=>(a.familyName||a.name).localeCompare(b.familyName||b.name));
  return <div className="fixed inset-0 z-50 bg-black/70 p-3 sm:p-10 flex items-center justify-center" role="dialog" aria-modal="true" aria-label="Choose a model" onKeyDown={e=>{if(e.key==='Escape')onClose();}}>

@@ -85,6 +85,7 @@ export function ActivityLog({onCancelLog, logs, activeLogId, autoplayVideos, onS
               <span className="text-xs font-medium text-neutral-300 px-2 py-0.5 rounded-full bg-neutral-800">
                 {log.modelName}
               </span>
+              {log.h3PromptMode&&<span className={`rounded-full px-2 py-0.5 text-[10px] ${log.h3PromptMode==='enhanced'?'bg-violet-500/15 text-violet-300':'bg-neutral-800 text-neutral-400'}`}>{log.h3PromptMode==='enhanced'?'H3 Enhanced':'Original'}</span>}
               <span className="text-[10px] text-neutral-500 uppercase tracking-wider">
                 {formatDistanceToNow(new Date(log.timestamp), { addSuffix: true })}
               </span>

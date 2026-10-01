@@ -1,6 +1,6 @@
 # Kai Media Studio
 
-Kai Media Studio is a local creative studio for generating images and videos through Kie.ai and Higgsfield, with provider routing and a shared model registry.
+Kai Media Studio is a local creative studio for generating images, videos and speech through Kie.ai and Higgsfield, with provider routing and a shared model registry.
 
 ## Creative studio update
 
@@ -25,11 +25,11 @@ The tests mock provider calls and do not generate paid media. Existing history a
 
 ## Version
 
-Current version: `2.0.0`
+Current version: `2.1.0`
 
 ## What is included
 
-- Text-to-image, image-to-image, text-to-video, image-to-video, and video-to-video workspaces
+- Text-to-image, image-to-image, text-to-video, image-to-video, video-to-video and text-to-speech workspaces
 - Kie API key setup from `.env.local` or the in-app settings panel
 - Model and parameter settings that stay saved after reload
 - Optional video autoplay setting
@@ -74,6 +74,19 @@ Current version: `2.0.0`
 
 6. Choose a mode, select a model, add your prompt or media input, then generate.
 
+### MiniMax H3 Prompt Director (optional)
+
+MiniMax H3 models show **Original**, **H3 Enhanced**, and **A/B Compare** prompt modes. Enhancement uses the [open-h3-ir](https://github.com/ruashots/open-h3-ir) compiler through its local HTTP API; other models never use it.
+
+```bash
+python3 -m venv .venv-h3ir
+.venv-h3ir/bin/pip install open-h3-ir
+# Configure H3IR_LLM_URL and H3IR_LLM_MODEL for an OpenAI-compatible chat-completions model.
+.venv-h3ir/bin/h3ir serve --host 127.0.0.1 --port 8420
+```
+
+Set `H3_IR_URL` only when the service runs elsewhere. The app uploads references to the compiler, previews its shot plan, and stores the original and compiled prompts with each generation. A/B submits two paid MiniMax generations, so the composer shows the doubled credit estimate before submission. If the compiler is unavailable, switch back to **Original**.
+
 ## Build for production
 
 ```bash
@@ -89,9 +102,11 @@ npm run check:improvements
 
 ## Update log
 
-### Unreleased
+### 2.1.0 — 2026-10-01
 
-- No unreleased changes.
+- Added an Audio workspace for Gemini and ElevenLabs text-to-speech with voice lists, speaking direction and provider-ready inputs.
+- Restored the live Kie credit balance in the persistent sidebar.
+- Added an optional open-h3-ir Prompt Director for MiniMax H3 with original, enhanced and paid A/B generation modes, shot-plan preview, reference upload and comparison labels.
 
 ### 2.0.0 — 2026-09-22
 

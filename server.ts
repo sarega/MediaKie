@@ -10,6 +10,7 @@ import { createServer as createViteServer } from 'vite';
 import dotenv from 'dotenv';
 import {createThumbnailer} from './providers/thumbnails';
 import { installProviders } from './providers/service';
+import {installH3Enhancer} from './providers/h3-ir';
 
 dotenv.config({ path: ['.env.local', '.env'] });
 
@@ -262,6 +263,7 @@ async function startServer() {
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ limit: '1mb', extended: false }));
   const providerService = await installProviders(app, dataDir, assertPublicRemoteUrl); // Support large base64/image payloads
+  installH3Enhancer(app);
   app.use('/library', express.static(getProjectLibraryDir(defaultProjectId)));
   app.use('/projects/:projectId/library', (req, res, next) => {
     const projectId = safeProjectId(req.params.projectId);

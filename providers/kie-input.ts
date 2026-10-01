@@ -58,6 +58,25 @@ export function prepareKieInput(selectedModel: AIModel, settings: Record<string,
     const finalVideoStr = inputPayload.__sourceVideo || '';
     delete inputPayload.__sourceImage;
     delete inputPayload.__sourceVideo;
+    if (selectedModel.id === 'google/gemini-3-8-flash-tts') {
+        const text = String(inputPayload.prompt || '').trim();
+        if (!text)
+            throw new Error('Enter the text you want the voice to speak.');
+        inputPayload.speakers = [{ speaker_id: 'Speaker 1', voice_name: inputPayload.voice_name || 'Fola' }];
+        inputPayload.dialogue_turns = [{ speaker_id: 'Speaker 1', style: inputPayload.style || 'Warm, natural and clear.', text }];
+        delete inputPayload.prompt;
+        delete inputPayload.voice_name;
+        delete inputPayload.style;
+        return inputPayload;
+    }
+    if (selectedModel.id === 'elevenlabs/text-to-speech-turbo-2-5') {
+        inputPayload.text = String(inputPayload.prompt || '').trim();
+        if (!inputPayload.text)
+            throw new Error('Enter the text you want the voice to speak.');
+        inputPayload.timestamps = false;
+        delete inputPayload.prompt;
+        return inputPayload;
+    }
     if (finalVideoStr) {
         if (assignModelVideoInput(inputPayload, selectedModel, finalVideoStr)) {
             // Model-specific video source key is defined in the catalog.

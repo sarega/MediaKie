@@ -44,6 +44,11 @@ const veoInput = prepareKieInput(veo, { prompt: 'A scene', __sourceImage: 'https
 assert.equal(veoInput.seeds, 10000);
 assert.deepEqual(veoInput.imageUrls, ['https://example.com/a.jpg']);
 assert.ok(!('__sourceImage' in veoInput));
+const tts = MODEL_REGISTRY.find(m => m.id === 'google/gemini-3-8-flash-tts')!;
+const ttsInput = prepareKieInput(tts, { prompt: 'Hello', voice_name: 'Zephyr', style: 'Soft and slow.', temperature: 0.8 });
+assert.deepEqual(ttsInput, { temperature: 0.8, speakers: [{ speaker_id: 'Speaker 1', voice_name: 'Zephyr' }], dialogue_turns: [{ speaker_id: 'Speaker 1', style: 'Soft and slow.', text: 'Hello' }] });
+const elevenTts = MODEL_REGISTRY.find(m => m.id === 'elevenlabs/text-to-speech-turbo-2-5')!;
+assert.deepEqual(prepareKieInput(elevenTts, { prompt: 'Hello', voice: 'Rachel', stability: .5 }), { text: 'Hello', voice: 'Rachel', stability: .5, timestamps: false });
 const originalFetch = globalThis.fetch;
 const calls: {
     url: string;

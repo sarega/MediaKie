@@ -19,7 +19,7 @@ interface Props {
   remix?: {id:string;prompt:string;settings:Record<string,any>} | null;
   selectedModel: AIModel;
   autoplayVideos: boolean;
-  onGenerate: (prompt: string, imageBase64?: string, videoBase64?: string, params?: Record<string, any>) => void;
+  onGenerate: (prompt: string, imageBase64?: string, videoBase64?: string, params?: Record<string, any>) => Promise<void>;
   isSubmitting: boolean;
   latestLog?: GenerationLog;
   sourceAsset?: { id: string; type: 'image' | 'video'; url: string; label?: string; parameterKey?: string } | null;
@@ -37,6 +37,9 @@ type EditorClip = {
   start: number;
   end: number;
 };
+
+type H3PromptMode = 'original' | 'enhanced' | 'compare';
+type H3Compilation = {id:string;prompt:string;status:string;presentation?:unknown;plan?:{shots?:Array<{n:number;from:number;to:number;what_happens:string;camera:string;sound?:string}>};diagnostics?:Array<{severity:string;message:string}>};
 
 const formatSeconds = (value: number) => {
   if (!Number.isFinite(value)) return '0.0s';
@@ -63,6 +66,14 @@ export function MediaWorkspace({ workflow,onWorkflowChange,onInspect, onStartNew
   const selectedModel = useMemo(()=>({...baseModel,params:parametersFor(baseModel,policy==='manual'?provider as ProviderId:undefined)}),[baseModel,policy,provider]);
   const [workspaceMode, setWorkspaceMode] = useState<'create' | 'edit'>('create');
   const [prompt, setPrompt] = useState('');
+  const [h3PromptMode,setH3PromptMode] = useState<H3PromptMode>(()=>{
+    const saved=localStorage.getItem('kie_h3_prompt_mode');
+    return saved==='enhanced'||saved==='compare'?saved:'original';
+  });
+  const [h3Creativity,setH3Creativity] = useState<'restrained'|'balanced'|'bold'|'extreme'>('balanced');
+  const [h3Compilation,setH3Compilation] = useState<H3Compilation|null>(null);
+  const [h3Error,setH3Error] = useState('');
+  const [isCompilingH3,setIsCompilingH3] = useState(false);
   
   // Base64 files
   const [fileData, setFileData] = useState<{ type: 'image' | 'video', bgUrl: string, b64: string, duration?: number } | null>(null);
@@ -155,13 +166,59 @@ export function MediaWorkspace({ workflow,onWorkflowChange,onInspect, onStartNew
     }
   }, [sourceAsset, selectedModel]);
 
-  const handleGenerate = () => {
+  const isMiniMaxH3 = selectedModel.familyId === 'minimax-h3' || selectedModel.id.startsWith('minimax-h3/');
+
+  useEffect(()=>{localStorage.setItem('kie_h3_prompt_mode',h3PromptMode);},[h3PromptMode]);
+  useEffect(()=>{setH3Compilation(null);setH3Error('');},[prompt,paramValues,fileData,selectedModel.id,h3Creativity]);
+
+  const asDataUrl = async (value:string) => {
+    if(value.startsWith('data:')) return value;
+    const response=await fetch(value);
+    if(!response.ok) throw new Error('Unable to read a reference for H3 enhancement. Add the file again.');
+    const blob=await response.blob();
+    return await new Promise<string>((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(String(reader.result));reader.onerror=()=>reject(reader.error);reader.readAsDataURL(blob);});
+  };
+
+  const compileH3Prompt = async () => {
+    if(!prompt.trim()) throw new Error('Enter a prompt before enhancing it');
+    setIsCompilingH3(true);setH3Error('');
+    try{
+      const assets:Array<{dataUrl:string;kind:'image'|'video'|'audio';role?:string}>=[];
+      const seen=new Set<string>();
+      const addAsset=async(value:unknown,kind:'image'|'video'|'audio',role?:string)=>{
+        for(const item of (Array.isArray(value)?value:[value])){
+          if(typeof item!=='string'||!item||seen.has(item))continue;
+          seen.add(item);assets.push({dataUrl:await asDataUrl(item),kind,role});
+        }
+      };
+      for(const param of selectedModel.params||[]){
+        if(param.type!=='file')continue;
+        const kind:'image'|'video'|'audio'=param.accept?.includes('video')?'video':param.accept?.includes('audio')?'audio':'image';
+        const role=/last_frame|end_frame/.test(param.key)?'frame_anchor_last':/first_frame|start_frame/.test(param.key)?'frame_anchor_first':kind==='video'?'edit_source':kind==='audio'?'bgm':'subject';
+        await addAsset(paramValues[param.key],kind,role);
+      }
+      if(fileData)await addAsset(fileData.b64,fileData.type,fileData.type==='video'?'edit_source':selectedModel.category==='image-to-video'?'frame_anchor_first':'subject');
+      const result=await jsonRequest('/api/h3-ir/compile',{intent:prompt,seconds:Number(paramValues.duration)||6,aspect:paramValues.aspect_ratio||'16:9',creativity:h3Creativity,assets});
+      setH3Compilation(result);return result as H3Compilation;
+    }catch(error:any){setH3Error(error.message||'Unable to compile the H3 prompt');throw error;}
+    finally{setIsCompilingH3(false);}
+  };
+
+  const handleGenerate = async () => {
     if (!prompt.trim() && !fileData && !selectedModel.allowsPromptlessGeneration) return;
     
     const imageB64 = fileData?.type === 'image' ? fileData.b64 : undefined;
     const videoB64 = fileData?.type === 'video' ? fileData.b64 : undefined;
     
-    onGenerate(prompt, imageB64, videoB64, {...paramValues,__policy:policy,__provider:provider,__sourceDuration:fileData?.duration});
+    const common={...paramValues,__policy:policy,__provider:provider,__sourceDuration:fileData?.duration};
+    if(!isMiniMaxH3||h3PromptMode==='original'){
+      await onGenerate(prompt,imageB64,videoB64,{...common,...(isMiniMaxH3?{__h3PromptMode:'original'}:{})});return;
+    }
+    try{
+      const compiled=await compileH3Prompt();
+      if(h3PromptMode==='compare')await onGenerate(prompt,imageB64,videoB64,{...common,__h3PromptMode:'original',__h3PairId:compiled.id});
+      await onGenerate(compiled.prompt,imageB64,videoB64,{...common,__h3PromptMode:'enhanced',__h3OriginalPrompt:prompt,__h3PairId:compiled.id,__h3Plan:compiled.plan});
+    }catch{/* Error is shown beside the controls; no generation is submitted with a stale prompt. */}
   };
 
   const toBase64 = (file: File): Promise<string> => {
@@ -1229,6 +1286,18 @@ export function MediaWorkspace({ workflow,onWorkflowChange,onInspect, onStartNew
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-3 rounded-2xl border border-neutral-800/80 bg-neutral-900/90 p-3 shadow-2xl backdrop-blur-xl">
           
           <div className="flex flex-wrap items-center gap-3"><label className="text-xs text-neutral-400">Workflow <select aria-label="Generation workflow" value={workflow} onChange={e=>onWorkflowChange(e.target.value as Workflow)} className="ml-2 rounded-lg border border-violet-500/30 bg-neutral-950 px-3 py-2 text-violet-200">{WORKFLOWS.filter(w=>w.id!=='all'&&(w.modality==='all'||w.modality===(selectedModel.category.includes('video')?'video':'image'))).map(w=><option key={w.id} value={w.id}>{w.label}</option>)}</select></label><span className="text-xs text-neutral-500">{WORKFLOWS.find(w=>w.id===workflow)?.hint}</span></div>
+          {isMiniMaxH3 && <div className="rounded-xl border border-violet-500/25 bg-violet-500/5 p-3">
+            <div className="flex flex-wrap items-center gap-3">
+              <span className="flex items-center gap-1.5 text-xs font-medium text-violet-200"><Sparkles className="h-3.5 w-3.5"/>H3 Prompt Director</span>
+              <select aria-label="H3 prompt mode" value={h3PromptMode} onChange={e=>setH3PromptMode(e.target.value as H3PromptMode)} className="rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs">
+                <option value="original">Off · Original prompt</option><option value="enhanced">On · H3 enhanced</option><option value="compare">A/B · Generate both</option>
+              </select>
+              {h3PromptMode!=='original'&&<><label className="text-xs text-neutral-400">Creativity <select aria-label="H3 creativity" value={h3Creativity} onChange={e=>setH3Creativity(e.target.value as typeof h3Creativity)} className="ml-2 rounded-lg border border-neutral-700 bg-neutral-950 px-3 py-2 text-xs text-neutral-200"><option value="restrained">Restrained</option><option value="balanced">Balanced</option><option value="bold">Bold</option><option value="extreme">Extreme</option></select></label><button type="button" disabled={isCompilingH3||!prompt.trim()} onClick={()=>void compileH3Prompt().catch(()=>{})} className="rounded-lg border border-violet-500/30 px-3 py-2 text-xs text-violet-200 disabled:opacity-40">{isCompilingH3?'Compiling…':'Preview shot plan'}</button></>}
+              {h3PromptMode==='compare'&&<span className="text-[11px] text-amber-300">Creates 2 videos · estimated {estimatedCredits==null?'2× cost':`${estimatedCredits*2} credits total`}</span>}
+            </div>
+            {h3Error&&<p className="mt-2 text-xs text-red-300">{h3Error} · Start open-h3-ir locally or switch this option off.</p>}
+            {h3Compilation&&<details className="mt-3 rounded-lg border border-neutral-800 bg-neutral-950/70 p-3 text-xs"><summary className="cursor-pointer text-violet-200">Compiled shot plan · {h3Compilation.plan?.shots?.length||0} shots</summary><div className="mt-3 space-y-2 text-neutral-400">{h3Compilation.plan?.shots?.map(shot=><div key={shot.n}><span className="text-neutral-200">{shot.from}s–{shot.to}s</span> · {shot.what_happens}<span className="text-neutral-500"> · {shot.camera}</span></div>)||<p>Context-IR is ready.</p>}<details><summary className="cursor-pointer text-neutral-300">View compiled Context-IR</summary><pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-black p-3 text-[10px]">{h3Compilation.prompt}</pre></details></div></details>}
+          </div>}
           {!['text-to-video','text-to-image'].includes(workflow) && (selectedModel.params||[]).filter(p=>p.type==='file'&&p.accept?.includes('image')&&(/reference|first_frame|last_frame|start_frame|end_frame/.test(p.key))).length>0 && <div className="flex gap-3 overflow-x-auto py-1">{(selectedModel.params||[]).filter(p=>p.type==='file'&&p.accept?.includes('image')&&(/reference|first_frame|last_frame|start_frame|end_frame/.test(p.key))).map(param=><div key={param.key} className="shrink-0 rounded-lg border border-neutral-700 p-2 min-w-32"><label className="text-xs text-neutral-300 block">{param.name}<input aria-label={`Upload ${param.name}`} className="block max-w-48 mt-2 text-[10px]" type="file" accept={param.accept} multiple={param.multiple} onChange={async e=>{const files=Array.from(e.target.files||[]);appendParamFiles(param,await Promise.all(files.map(toBase64)));e.target.value='';}}/></label><div className="flex gap-1 mt-2">{valuesAsArray(paramValues[param.key]).map((url,index)=><button key={index} onClick={()=>removeParamFile(param,index)} aria-label={`Remove ${param.name} ${index+1}`} title="Remove image"><img src={String(url)} alt={param.name} className="w-14 h-12 object-cover rounded"/></button>)}</div></div>)}</div>}
           <div className="flex min-w-0 flex-1 flex-col gap-3 lg:flex-row lg:items-end">
             {!['text-to-video','text-to-image'].includes(workflow) && (selectedModel.supportsImageUpload || selectedModel.supportsVideoUpload) && !firstImageParameter(selectedModel,workflow) && (
@@ -1292,7 +1361,7 @@ export function MediaWorkspace({ workflow,onWorkflowChange,onInspect, onStartNew
             
             <button
               onClick={handleGenerate}
-              disabled={isSubmitting || !canSubmit}
+              disabled={isSubmitting || isCompilingH3 || !canSubmit}
               className={cn(
                 "flex h-12 sm:h-14 shrink-0 justify-center items-center gap-2 rounded-xl px-4 sm:px-6 font-medium shadow-lg transition-all",
                 isSubmitting
@@ -1308,8 +1377,8 @@ export function MediaWorkspace({ workflow,onWorkflowChange,onInspect, onStartNew
               ) : (
                 <>
                   <Sparkles className="w-4 h-4" />
-                  {estimatedCredits ? `${estimatedCredits} cr ` : ''}
-                  Generate
+                  {estimatedCredits ? `${h3PromptMode==='compare'&&isMiniMaxH3?estimatedCredits*2:estimatedCredits} cr ` : ''}
+                  {h3PromptMode==='compare'&&isMiniMaxH3?'Generate A/B':'Generate'}
                 </>
               )}
             </button>

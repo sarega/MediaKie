@@ -56,7 +56,7 @@ export function capabilitiesFor(model: AIModel) {
     const parameters = model.params || [];
     const matching = (pattern: RegExp) => parameters.filter(p => pattern.test(p.key));
     return {
-        modality: model.category.includes('video') ? 'video' : model.category === 'text-to-text' ? 'text' : 'image',
+        modality: model.category.includes('video') ? 'video' : model.category === 'text-to-audio' ? 'audio' : model.category === 'text-to-text' ? 'text' : 'image',
         workflow: model.category, inputs: ['text', ...(model.supportsImageUpload ? ['image'] : []), ...(model.supportsVideoUpload ? ['video'] : [])],
         parameters, imageInputKey: model.imageInputKey, videoInputKey: model.videoInputKey,
         referenceImages: matching(/reference.*image|image.*reference/), firstFrame: matching(/first_frame|start_frame/), lastFrame: matching(/last_frame|end_frame|tail_image/),

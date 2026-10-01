@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { AIModel, SUPPORTED_MODELS, ModelCategory } from '../types';
 import { cn } from '../lib/utils';
-import { Image, Images, Wand2, Video, FileText, RefreshCw, Search, Settings, Wallet } from 'lucide-react';
+import { Image, Images, Wand2, Video, FileText, RefreshCw, Search, Settings, Volume2, Wallet } from 'lucide-react';
 
 interface Props {
   selectedModel: AIModel;
@@ -20,6 +20,7 @@ const CATEGORY_NAMES: Record<ModelCategory, string> = {
   'text-to-video': 'Text to Video',
   'image-to-video': 'Image to Video',
   'video-to-video': 'Video to Video',
+  'text-to-audio': 'Text to Speech',
   'text-to-text': 'Omni Tools'
 };
 
@@ -30,6 +31,7 @@ const CATEGORY_ICONS: Record<ModelCategory, React.ElementType> = {
   'text-to-video': Video,
   'image-to-video': Video,
   'video-to-video': Video,
+  'text-to-audio': Volume2,
   'text-to-text': FileText
 };
 

@@ -1,11 +1,12 @@
 import type {AIModel} from '../types';
-export type Workflow = 'all'|'text-to-image'|'image-to-image'|'image-edit'|'text-to-video'|'image-to-video'|'reference'|'frames'|'video-to-video'|'extend'|'tools';
-export const WORKFLOWS: {id:Workflow;label:string;hint:string;modality:'image'|'video'|'all'}[] = [
+export type Workflow = 'all'|'text-to-image'|'image-to-image'|'image-edit'|'text-to-video'|'image-to-video'|'text-to-speech'|'reference'|'frames'|'video-to-video'|'extend'|'tools';
+export const WORKFLOWS: {id:Workflow;label:string;hint:string;modality:'image'|'video'|'audio'|'all'}[] = [
  {id:'all',label:'All workflows',hint:'Browse every workflow',modality:'all'},
  {id:'text-to-image',label:'Text → Image',hint:'Describe the image you want to create.',modality:'image'},
  {id:'image-to-image',label:'Image → Image',hint:'Add an image to transform or use as a visual reference.',modality:'image'},
  {id:'image-edit',label:'Edit image',hint:'Add an image, then describe your changes.',modality:'image'},
  {id:'text-to-video',label:'Text → Video (T2V)',hint:'Create a video from a prompt. Choose Image → Video to animate a still.',modality:'video'},
+ {id:'text-to-speech',label:'Text → Speech',hint:'Write the words to speak, then direct the voice with a speaking style.',modality:'audio'},
  {id:'image-to-video',label:'Image → Video (I2V)',hint:'Add a starting image, then describe how it should move.',modality:'video'},
  {id:'reference',label:'Reference → Video',hint:'Use reference images to guide subjects or style; they need not be the opening frame.',modality:'video'},
  {id:'frames',label:'First + Last Frame',hint:'Add a starting frame and an ending frame to guide the transition.',modality:'video'},
@@ -18,6 +19,7 @@ export function primaryWorkflow(model:AIModel): Workflow {
  if (/extend/.test(model.id))return 'extend';
  if (/reference-to-video/.test(model.id))return 'reference';
  if (/transition/.test(model.id))return 'frames';
+ if(model.category==='text-to-audio')return 'text-to-speech';
  if(model.category==='text-to-text')return 'tools';
  return model.category;
 }

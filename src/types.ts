@@ -1,6 +1,6 @@
 export type AppTheme = 'dark' | 'light';
 
-export type ModelCategory = 'text-to-image' | 'image-to-image' | 'image-edit' | 'text-to-video' | 'image-to-video' | 'video-to-video' | 'text-to-text';
+export type ModelCategory = 'text-to-image' | 'image-to-image' | 'image-edit' | 'text-to-video' | 'image-to-video' | 'video-to-video' | 'text-to-audio' | 'text-to-text';
 
 export interface ModelParamConfig {
   name: string;
@@ -1343,7 +1343,28 @@ const nanoBananaClassicParams: ModelParamConfig[] = [
   { name: 'Output Format', key: 'output_format', type: 'select', options: [{ label: 'PNG', value: 'png' }, { label: 'JPG', value: 'jpg' }], defaultValue: 'png' }
 ];
 
+const geminiVoiceOptions = [
+  ['Zephyr','Bright'],['Puck','Upbeat'],['Charon','Informative'],['Kore','Firm'],['Fenrir','Excitable'],['Leda','Youthful'],['Orus','Firm'],['Aoede','Breezy'],['Callirrhoe','Easy-going'],['Autonoe','Bright'],['Enceladus','Breathy'],['Iapetus','Clear'],['Umbriel','Easy-going'],['Algieba','Smooth'],['Despina','Smooth'],['Erinome','Clear'],['Algenib','Gravelly'],['Rasalgethi','Informative'],['Laomedeia','Upbeat'],['Achernar','Soft'],['Alnilam','Firm'],['Schedar','Even'],['Gacrux','Mature'],['Pulcherrima','Forward'],['Achird','Friendly'],['Zubenelgenubi','Casual'],['Vindemiatrix','Gentle'],['Sadachbia','Lively'],['Sadaltager','Knowledgeable'],['Sulafat','Warm'],
+].map(([value,tone])=>({label:`${value} — ${tone}`,value,description:tone}));
+const elevenVoiceOptions = [
+  ['Rachel','Calm, conversational'],['Drew','Well-rounded, news'],['Clyde','Deep, intense character'],['Antoni','Warm, well-rounded'],['Aria','Expressive, social'],['Arnold','Crisp narration'],['Charlotte','British, seductive'],['Dave','Conversational British'],['Domi','Strong, energetic'],['Dorothy','Pleasant British'],['Elli','Emotional, youthful'],['Emily','Calm American'],['Ethan','Soft American'],['Fin','Old Irish storyteller'],['Freya','Expressive American'],['Gigi','Young, animated'],['Giovanni','Italian, warm'],['Glinda','Witch character'],['Grace','Gentle Southern'],['James','Calm British'],['Jeremy','Excited narrator'],['Jessie','Raspy character'],['Joseph','British narrator'],['Josh','Deep American'],['Michael','Calm, seasoned'],['Mimi','Soft Australian'],['Nicole','Whispery, audiobook'],['Patrick','Shouty character'],['Paul','Authoritative news'],['Sam','Raspy American'],['Serena','Pleasant, interactive'],['Thomas','Calm, meditative'],
+].map(([value,tone])=>({label:`${value} — ${tone}`,value,description:tone}));
+const geminiTtsParams: ModelParamConfig[] = [
+  { name: 'Voice', key: 'voice_name', type: 'select', options: geminiVoiceOptions, defaultValue: 'Zephyr' },
+  { name: 'Speaking style', key: 'style', type: 'text', defaultValue: 'Warm, natural and clear.', description: 'Describe tone, pace, emotion, accent and delivery in natural language.' },
+  { name: 'Creativity', key: 'temperature', type: 'slider', min: 0, max: 2, step: 0.1, defaultValue: 1 },
+];
+const elevenTtsParams: ModelParamConfig[] = [
+  { name: 'Voice', key: 'voice', type: 'select', options: elevenVoiceOptions, defaultValue: 'Rachel' },
+  { name: 'Stability', key: 'stability', type: 'slider', min: 0, max: 1, step: 0.05, defaultValue: 0.5 },
+  { name: 'Similarity', key: 'similarity_boost', type: 'slider', min: 0, max: 1, step: 0.05, defaultValue: 0.75 },
+  { name: 'Style exaggeration', key: 'style', type: 'slider', min: 0, max: 1, step: 0.05, defaultValue: 0 },
+  { name: 'Speed', key: 'speed', type: 'slider', min: 0.7, max: 1.2, step: 0.05, defaultValue: 1 },
+];
+
 export const SUPPORTED_MODELS: AIModel[] = [
+  { id: 'google/gemini-3-8-flash-tts', name: 'Gemini 3.8 Flash TTS', provider: 'Google', category: 'text-to-audio', familyId: 'google-gemini-tts', familyName: 'Gemini TTS', modeName: 'Text to Speech', params: geminiTtsParams },
+  { id: 'elevenlabs/text-to-speech-turbo-2-5', name: 'ElevenLabs Turbo 2.5', provider: 'ElevenLabs', category: 'text-to-audio', familyId: 'elevenlabs-tts', familyName: 'ElevenLabs TTS', modeName: 'Text to Speech', params: elevenTtsParams },
   // Image Models
   { id: 'wan/2-7-image', name: 'Wan 2.7 Image', provider: 'Wan', category: 'text-to-image', params: wanImageParams, creditEstimator: wan27ImageCreditEstimator },
   { id: 'bytedance/seedream', name: 'Seedream 3.0', provider: 'Bytedance', category: 'text-to-image', params: seedream3TextToImageParams, creditEstimator: seedream3CreditEstimator },
@@ -1534,6 +1555,9 @@ export interface GenerationLog {
   settingsSnapshot?: Record<string, any>;
   estimatedCost?: {usd:number|null;credits?:number;kind:string;source:string};
   finalCost?: {usd:number|null;kind:string;source:string};
+  h3PromptMode?: 'original' | 'enhanced';
+  h3PairId?: string;
+  enhancedPrompt?: string;
 
   id: string;
   timestamp: string;
@@ -1550,5 +1574,5 @@ export interface GenerationLog {
   mediaUrls?: string[]; // Array of result URLs (some models return multiple images)
   textResult?: string;
   error?: string;
-  type: 'image' | 'video' | 'text';
+  type: 'image' | 'video' | 'audio' | 'text';
 }
