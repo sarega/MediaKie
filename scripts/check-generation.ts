@@ -38,7 +38,9 @@ try {
     assert.equal(config.status, 200);
     assert.ok(!JSON.stringify(config).includes('secret'));
     assert.equal((await request('/api/providers', { maxConcurrent: 0 }, 'PUT')).status, 400);
-    const create = { logicalModel: 'soul-2:text-to-image', projectId: 'default', input: { prompt: 'fixture', resolution: '720p', batch_size: 1 } };
+    const create = { logicalModel: 'soul-2:text-to-image', projectId: 'default',productionShotId:'shot-1', sourceMediaUrls: ['/library/fixture.png'], input: { prompt: 'fixture', resolution: '720p', batch_size: 1 } };
+    assert.equal((await request('/api/generation/jobs', {...create,productionShotId:'/invalid'})).status,400);
+    assert.equal((await request('/api/generation/jobs', {...create, sourceMediaUrls: ['/etc/passwd']})).status, 400);
     const first = await request('/api/generation/jobs', create);
     assert.equal(first.status, 202);
     await waitFor(async () => submissions === 1);
@@ -55,6 +57,9 @@ try {
     const disk = JSON.parse(await fs.readFile(path.join(directory, 'generation-jobs.json'), 'utf8'));
     assert.equal(disk[0].outputs[0], 'https://example.com/result.png');
     assert.equal(disk[0].provider, 'higgsfield');
+    assert.deepEqual(disk[0].sourceMediaUrls, create.sourceMediaUrls);
+    assert.equal(disk[0].productionShotId,'shot-1');
+    assert.deepEqual(service.inputReferences()[0].sourceMediaUrls, create.sourceMediaUrls);
     assert.equal(disk[0].estimatedCost.kind, 'estimate');
     assert.equal(disk[0].finalCost, undefined);
     await request('/api/providers', { spendCap: 0.001 }, 'PUT');
@@ -71,6 +76,7 @@ try {
     const restartApp = express();
     service = await installProviders(restartApp, directory, async (url) => new URL(url));
     assert.equal(submissions, 1);
+    assert.deepEqual(service.inputReferences()[0].sourceMediaUrls, create.sourceMediaUrls, 'Local reference links must survive queue recovery');
     console.log('Generation service: durable jobs, connection redaction, queue limits, cancellation, spend caps and restart recovery passed.');
 }
 finally {

@@ -15,6 +15,12 @@ assert.equal(estimateCost(findModel('soul-standard:text-to-image')!, 'higgsfield
 assert.throws(() => validateParameters(soul, { batch_size: 3 }));
 assert.throws(() => validateParameters(soul, { seed: 0 }));
 assert.throws(() => validateParameters(soul, { enhance_prompt: 'true' }));
+const omni=MODEL_REGISTRY.find(m=>m.id==='gemini-omni-video')!;
+assert.doesNotThrow(()=>validateParameters(omni,defaultsFor(omni)),'Empty default voice selection is valid');
+const voice=omni.params!.find(p=>p.key==='audio_ids')!.options![0].value;
+assert.doesNotThrow(()=>validateParameters(omni,{audio_ids:[voice]}));
+assert.throws(()=>validateParameters(omni,{audio_ids:[voice,voice,voice,voice]}));
+assert.throws(()=>validateParameters(omni,{audio_ids:['invalid-voice']}));
 assert.equal(capabilitiesFor(soul).modality, 'image');
 assert.deepEqual(compactParams(soul).map(p => p.key), ['aspect_ratio', 'resolution', 'batch_size']);
 const html = renderToStaticMarkup(React.createElement(ComposerControls, { model: soul, values: defaultsFor(soul), onChange: () => { }, onModels: () => { }, onMore: () => { }, policy: 'manual', onPolicy: () => { }, provider: 'higgsfield', onProvider: () => { } }));
@@ -41,8 +47,8 @@ assert.equal(kie.normalize({ data: { state: 'fail', failMsg: 'failed' } }).statu
 assert.equal(kie.normalize({ data: { successFlag: 1, resultUrls: ['https://cdn.example/a.mp4'] } }, { provider: 'kie', modelId: 'veo-3.1' }).status, 'completed');
 const veo = MODEL_REGISTRY.find(m => m.id === 'veo-3.1' && m.category === 'image-to-video')!;
 const veoInput = prepareKieInput(veo, { prompt: 'A scene', __sourceImage: 'https://example.com/a.jpg', seeds: 1 });
-assert.equal(veoInput.seeds, 10000);
-assert.deepEqual(veoInput.imageUrls, ['https://example.com/a.jpg']);
+assert.equal(veoInput.seeds, undefined);
+assert.deepEqual(veoInput.image_urls, ['https://example.com/a.jpg']);
 assert.ok(!('__sourceImage' in veoInput));
 const tts = MODEL_REGISTRY.find(m => m.id === 'google/gemini-3-8-flash-tts')!;
 const ttsInput = prepareKieInput(tts, { prompt: 'Hello', voice_name: 'Zephyr', style: 'Soft and slow.', temperature: 0.8 });

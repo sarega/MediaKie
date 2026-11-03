@@ -5,6 +5,8 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { MediaWorkspace } from './components/MediaWorkspace';
+import {MediaSourcePicker, ImageDestinationDialog, type VideoFrameSource} from './components/MediaSourcePicker';
+import {imageDestination, imageInputRole, type ImageInputRole} from './models/imageInputs';
 import { AudioWorkspace } from './components/AudioWorkspace';
 import { ActivityLog } from './components/ActivityLog';
 import { SettingsModal } from './components/SettingsModal';
@@ -12,6 +14,10 @@ import { GenerationLog, AIModel, Project } from './types';
 import { MODEL_REGISTRY as SUPPORTED_MODELS, resolveModel } from './models/registry';
 import { isStaleGeneration, jsonRequest, pollGeneration } from './generation/client';
 import {LibraryGallery} from './components/LibraryGallery';
+import {ProductionLibrary} from './components/ProductionLibrary';
+import {ProductionStudio} from './components/ProductionStudio';
+import type {ProductionAsset} from './models/assets';
+import {localMediaUrls} from './models/assets';
 import {WORKFLOWS,primaryWorkflow,supportsWorkflow,firstImageParameter,type Workflow} from './models/workflows';
 import { ModelBrowser } from './ui/drawers/ModelBrowser';
 import {modelKey,rememberSelection,savedSelection,sectionForModel,type StudioSection} from './models/preferences';
@@ -20,8 +26,8 @@ import { createHistoryApi } from './lib/historyApi';
 import { pollKieTask } from './lib/kieTaskPolling';
 import { Download, Edit3, FolderOpen, PanelRightClose, Plus, Trash2, Wallet, X } from 'lucide-react';
 
-const arrayUrlParams = new Set(['image_urls', 'input_urls', 'image_input', 'mask_url', 'image_references', 'reference_image_urls', 'reference_video_urls', 'reference_audio_urls', 'video_urls']);
-type SourceAsset = { id: string; type: 'image' | 'video'; url: string; label?: string; parameterKey?: string };
+const arrayUrlParams = new Set(['image_urls', 'input_urls', 'image_input', 'mask_url', 'image_references', 'reference_image_urls', 'reference_video_urls', 'reference_audio_urls', 'video_urls', 'keyframe_urls']);
+type SourceAsset = { id: string; type: 'image' | 'video' | 'audio'; url: string; label?: string; parameterKey?: string; imageRole?: ImageInputRole };
 type PaneSide = 'left' | 'right';
 
 const logKey = (projectId: string, id: string) => `${projectId}:${id}`;
@@ -158,7 +164,8 @@ export default function App() {
   const [historySaveError, setHistorySaveError] = useState('');
   const [historyRetryToken, setHistoryRetryToken] = useState(0);
   const [sourceAsset, setSourceAsset] = useState<SourceAsset | null>(null);
-  const [frameGrabber, setFrameGrabber] = useState<{ url: string; time: number; duration: number } | null>(null);
+  const [frameGrabber, setFrameGrabber] = useState<VideoFrameSource | null>(null);
+  const [transferImage, setTransferImage] = useState<string | null>(null);
   const [isCreateTaskPending, setIsCreateTaskPending] = useState(false);
   const [isCompactLayout, setIsCompactLayout] = useState(() => window.matchMedia('(max-width: 900px)').matches);
   const [leftPaneOpen, setLeftPaneOpen] = useState(false);
@@ -170,7 +177,7 @@ export default function App() {
   const cancelledLogKeysRef = useRef(new Set<string>());
   const createTaskInFlightRef = useRef(false);
   const lastSubmissionRef = useRef<{ signature: string; timestamp: number } | null>(null);
-  const frameVideoRef = useRef<HTMLVideoElement>(null);
+  const inspectorVideoRef = useRef<HTMLVideoElement>(null);
   const currentProject = projects.find((project) => project.id === currentProjectId) || null;
   const activeLog = logs.find((log) => log.id === activeLogId);
   const hasGeneratingLogs = logs.some((log) => log.status === 'generating');
@@ -195,6 +202,7 @@ export default function App() {
 
   useEffect(() => {
     currentProjectIdRef.current = currentProjectId;
+    setSourceAsset(null); setFrameGrabber(null); setTransferImage(null);
   }, [currentProjectId]);
 
   useEffect(()=>{
@@ -348,7 +356,7 @@ export default function App() {
           const index=serverLogs.findIndex(l=>l.generationJobId===job.id || l.id===job.historyId);
           if (index>=0 && serverLogs[index].generationJobId) continue;
           const model=SUPPORTED_MODELS.find(m=>m.logicalId===job.logicalModel);
-          const recovered: GenerationLog={id:job.historyId || job.id,generationJobId:job.id,taskId:job.id,providerTaskId:job.taskId,logicalModel:job.logicalModel,normalizedStatus:job.status,modelId:model?.id || job.logicalModel,modelName:model?.name || job.logicalModel,provider:job.provider,prompt:job.prompt,settingsSnapshot:job.settings,estimatedCost:job.estimatedCost,finalCost:job.finalCost,timestamp:job.createdAt,type:model?.category.includes('video')?'video':model?.category==='text-to-audio'?'audio':model?.category==='text-to-text'?'text':'image',status:['failed','canceled','unknown'].includes(job.status)?'failed':'generating',error:job.error};
+          const recovered: GenerationLog={id:job.historyId || job.id,generationJobId:job.id,taskId:job.id,providerTaskId:job.taskId,logicalModel:job.logicalModel,normalizedStatus:job.status,modelId:model?.id || job.logicalModel,modelName:model?.name || job.logicalModel,provider:job.provider,prompt:job.prompt,settingsSnapshot:job.settings,sourceMediaUrls:job.sourceMediaUrls,productionShotId:job.productionShotId,estimatedCost:job.estimatedCost,finalCost:job.finalCost,timestamp:job.createdAt,type:model?.category.includes('video')?'video':model?.category==='text-to-audio'?'audio':model?.category==='text-to-text'?'text':'image',status:['failed','canceled','unknown'].includes(job.status)?'failed':'generating',error:job.error};
           if(index>=0)serverLogs[index]=recovered;else serverLogs.unshift(recovered);
         }
         persistedLogSignaturesRef.current = new Map((Array.isArray(data.logs)?data.logs:[]).map((log: GenerationLog) => [log.id, JSON.stringify(log)]));
@@ -482,62 +490,15 @@ export default function App() {
     return () => { cancelled = true; };
   }, [historyLoaded, loadedProjectId, currentProjectId, historyBackfilled, logs]);
 
-  const extractFrameFromVideo = (url: string) => {
-    return new Promise<string>((resolve, reject) => {
-      const video = document.createElement('video');
-      const canvas = document.createElement('canvas');
-      let settled = false;
-
-      const cleanup = () => {
-        video.pause();
-        video.removeAttribute('src');
-        video.load();
-      };
-      const fail = (message: string) => {
-        if (settled) return;
-        settled = true;
-        cleanup();
-        reject(new Error(message));
-      };
-
-      video.crossOrigin = 'anonymous';
-      video.muted = true;
-      video.playsInline = true;
-      video.preload = 'auto';
-      video.onerror = () => fail('Unable to load this video for frame extraction.');
-      video.onloadedmetadata = () => {
-        const duration = Number.isFinite(video.duration) ? video.duration : 0;
-        video.currentTime = Math.max(0, duration - 0.2);
-      };
-      video.onseeked = () => {
-        if (settled) return;
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        const ctx = canvas.getContext('2d');
-        if (!ctx || !canvas.width || !canvas.height) {
-          fail('Unable to read a video frame.');
-          return;
-        }
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        settled = true;
-        const dataUrl = canvas.toDataURL('image/png');
-        cleanup();
-        resolve(dataUrl);
-      };
-      video.src = url;
-      video.load();
-    });
-  };
-
   const useAsSource = (asset: { type: 'image' | 'video'; url: string; label?: string }) => {
-    if (asset.type==='image' && !selectedModel.supportsImageUpload) {const candidate=SUPPORTED_MODELS.find(m=>m.category==='image-to-image'&&m.supportsImageUpload);if(candidate)selectModel(candidate);}
+    if (asset.type === 'image') {setTransferImage(asset.url); setRightPaneOpen(false); return;}
     setPage(asset.type==='video'?'Video':selectedModel.category.includes('video')?'Video':'Image');
     setSourceAsset({ ...asset, id: crypto.randomUUID() });
     setRightPaneOpen(false);
   };
 
-  const handleGrabVideoFrame = async (url: string) => {
-    setFrameGrabber({ url, time: 0, duration: 0 });
+  const handleGrabVideoFrame = (url: string, time = 0) => {
+    setFrameGrabber({url, time}); setInspected(null); setRightPaneOpen(false);
   };
 
   const handleRevealFile = async (url: string) => {
@@ -551,44 +512,6 @@ export default function App() {
       if (!res.ok) throw new Error(data.error || 'Unable to reveal file in Finder.');
     } catch (error: any) {
       alert(error.message || 'Unable to reveal file in Finder.');
-    }
-  };
-
-  const captureFrameAtTime = async () => {
-    if (!frameGrabber || !frameVideoRef.current) return;
-    const video = frameVideoRef.current;
-    try {
-      if (Math.abs(video.currentTime - frameGrabber.time) > 0.02) {
-        video.currentTime = frameGrabber.time;
-        await new Promise<void>((resolve, reject) => {
-          const done = () => {
-            video.removeEventListener('seeked', done);
-            video.removeEventListener('error', fail);
-            resolve();
-          };
-          const fail = () => {
-            video.removeEventListener('seeked', done);
-            video.removeEventListener('error', fail);
-            reject(new Error('Unable to seek this video frame.'));
-          };
-          video.addEventListener('seeked', done, { once: true });
-          video.addEventListener('error', fail, { once: true });
-        });
-      }
-
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d');
-      if (!ctx || !canvas.width || !canvas.height) {
-        throw new Error('Unable to read a video frame.');
-      }
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const frameUrl = canvas.toDataURL('image/png');
-      useAsSource({ type: 'image', url: frameUrl, label: 'Video frame' });
-      setFrameGrabber(null);
-    } catch (error: any) {
-      alert(error.message || 'Unable to grab a frame from this video.');
     }
   };
 
@@ -810,15 +733,22 @@ export default function App() {
   }, [historyLoaded, loadedProjectId, currentProjectId, logs]);
 
   const handleGenerate = async (prompt: string, imageBase64?: string, videoBase64?: string, params?: Record<string, any>) => {
+    const generationModel = params?.__studioModel ? SUPPORTED_MODELS.find(m => m.logicalId === params.__studioModel) : selectedModel;
+    if (!generationModel || generationModel.unavailableReason) throw new Error('Selected production model is unavailable');
     if (!currentProjectId) {
       alert('Open or create a project before generating media.');
       return;
     }
     const projectId = currentProjectId;
 
-    const submissionSignature = buildGenerationSignature(selectedModel, prompt, imageBase64, videoBase64, params);
+    const fileParamKeys = new Set<string>((generationModel.params || []).filter(param => param.type === 'file').map(param => param.key));
+    if (generationModel.supportsImageUpload) fileParamKeys.add(generationModel.imageInputKey || 'image_urls');
+    if (generationModel.supportsVideoUpload) fileParamKeys.add(generationModel.videoInputKey || 'video_urls');
+    const sourceType = params?.__sourceType || (videoBase64 ? 'video' : imageBase64 ? 'image' : undefined);
+    const submissionSignature = buildGenerationSignature(generationModel, prompt, imageBase64, videoBase64, params);
     const now = Date.now();
     if (createTaskInFlightRef.current) {
+      if (params?.__studioShotId) throw new Error('Another generation is being submitted. Wait before starting this batch.');
       console.warn('Ignored duplicate generate request while a task create request is already in flight.');
       return;
     }
@@ -826,6 +756,7 @@ export default function App() {
       lastSubmissionRef.current?.signature === submissionSignature &&
       now - lastSubmissionRef.current.timestamp < 30_000
     ) {
+      if (params?.__studioShotId) throw new Error('This take was submitted recently. Review its status before generating again.');
       console.warn('Ignored duplicate generate request with the same payload.');
       return;
     }
@@ -839,19 +770,21 @@ export default function App() {
     const logEntry: GenerationLog = {
       id: crypto.randomUUID(),
       timestamp: new Date().toISOString(),
-      modelId: selectedModel.id,
-      modelName: selectedModel.name,
-      provider: selectedModel.provider,
+      modelId: generationModel.id,
+      modelName: generationModel.name,
+      provider: generationModel.provider,
+      productionShotId: params?.__studioShotId,
       prompt: originalPrompt,
+      sourceMediaUrls: [...new Set(localMediaUrls([imageBase64, videoBase64, [...fileParamKeys].map(key => params?.[key])]))],
       h3PromptMode,
       h3PairId: typeof params?.__h3PairId==='string'?params.__h3PairId:undefined,
       enhancedPrompt: h3PromptMode==='enhanced'?prompt:undefined,
       status: 'generating',
       pollingState: 'active',
-      type: selectedModel.category === 'text-to-text'
+      type: generationModel.category === 'text-to-text'
         ? 'text'
-        : selectedModel.category === 'text-to-audio' ? 'audio'
-        : selectedModel.category.includes('video') ? 'video' : 'image',
+        : generationModel.category === 'text-to-audio' ? 'audio'
+        : generationModel.category.includes('video') ? 'video' : 'image',
     };
 
     setLogs((prev) => [logEntry, ...prev]);
@@ -860,7 +793,7 @@ export default function App() {
     try {
       const headers = getKieHeaders();
       const routing = {policy:params?.__policy || 'auto',provider:params?.__provider};
-      const selection = await jsonRequest('/api/generation/estimate',{logicalModel:resolveModel(selectedModel).logicalId,input:params || {},sourceType:videoBase64?'video':imageBase64?'image':undefined,sourceDuration:params?.__sourceDuration,...routing});
+      const selection = await jsonRequest('/api/generation/estimate',{logicalModel:resolveModel(generationModel).logicalId,input:{prompt:prompt.trim(),...params},sourceType,sourceDuration:params?.__sourceDuration,...routing});
 
       // Helper to upload base64 to our server which proxies to tmpfiles for a public URL
       const getPublicUrl = async (dataUrl: string) => {
@@ -910,7 +843,6 @@ export default function App() {
       const finalImageStr = imageBase64 ? await getPublicUrl(imageBase64) : '';
 
       const normalizedParams: Record<string, any> = {};
-      const fileParamKeys = new Set((selectedModel.params || []).filter((param) => param.type === 'file').map((param) => param.key));
       for (const [key, value] of Object.entries(params || {})) {
         if (key.startsWith('__') || value === '' || value === null || value === undefined) continue;
         const shouldResolveMediaUrl = fileParamKeys.has(key);
@@ -935,9 +867,11 @@ export default function App() {
       inputPayload.__sourceVideo = finalVideoStr;
 
       const job = await jsonRequest('/api/generation/jobs', {
-        logicalModel: resolveModel(selectedModel).logicalId, input: compactInput(inputPayload),
+        logicalModel: resolveModel(generationModel).logicalId, input: compactInput(inputPayload),
         policy:'manual', provider:selection.provider, projectId, historyId:logEntry.id,
-        sourceType:videoBase64 ? 'video' : imageBase64 ? 'image' : undefined,
+        sourceMediaUrls: logEntry.sourceMediaUrls,
+        productionShotId: logEntry.productionShotId,
+        sourceType,
         sourceDuration:params?.__sourceDuration,
       });
       const taskId = job.id;
@@ -950,7 +884,7 @@ export default function App() {
         });
       }
       if (!cancelledLogKeysRef.current.has(logKey(projectId, logEntry.id))) {
-        void pollTaskResult(logEntry.id, taskId, selectedModel.id, logEntry.type, projectId, taskLog);
+        void pollTaskResult(logEntry.id, taskId, generationModel.id, logEntry.type, projectId, taskLog);
       }
     } catch (error: any) {
       updateLogForProject(projectId, logEntry.id, logEntry, (log) => ({
@@ -961,6 +895,7 @@ export default function App() {
         durationMs: Date.now() - new Date(log.timestamp).getTime(),
         error: error.message || 'Unable to create generation task',
       }));
+      if (params?.__studioShotId) throw error;
     }
     finally {
       createTaskInFlightRef.current = false;
@@ -1018,7 +953,7 @@ export default function App() {
   const handleClearProject = async (project = currentProject) => {
     if (!project) return;
     const projectId = project.id;
-    if (!window.confirm(`Clear all generations and local media from "${project.name}"? This cannot be undone. Export a backup first if you may need these files later.`)) return;
+    if (!window.confirm(`Clear all generations and their saved media from "${project.name}"? Imported library assets will remain. This cannot be undone. Export a backup first if you may need these files later.`)) return;
     const projectLogs = projectId === currentProjectId ? logs : [];
     const cancelledKeys = projectLogs.map((log) => logKey(projectId, log.id));
     cancelledKeys.forEach((key) => cancelledLogKeysRef.current.add(key));
@@ -1062,7 +997,11 @@ export default function App() {
     setWorkflow(next);
     if(candidate){selectModel(candidate,next);setPage(candidate.category==='text-to-audio'?'Audio':candidate.category.includes('video')?'Video':'Image');}
     if(next==='text-to-video'||next==='text-to-image')setSourceAsset(null);
-    else if(candidate&&sourceAsset?.type==='image')setSourceAsset({...sourceAsset,id:crypto.randomUUID(),parameterKey:firstImageParameter(candidate,next)?.key});
+    else if(candidate&&sourceAsset?.type==='image') {
+      const role = next === 'reference' ? 'reference' : sourceAsset.imageRole === 'last' || imageInputRole(sourceAsset.parameterKey || '') === 'last' ? 'last' : 'first';
+      const target = imageDestination(candidate, role);
+      setSourceAsset(target ? {...sourceAsset, id:crypto.randomUUID(), parameterKey:target.param?.key, imageRole:role} : null);
+    }
     if(openBrowser)openPane('left');
   };
   const animateImage = (log:GenerationLog, asReference=false) => {
@@ -1073,11 +1012,28 @@ export default function App() {
     setSourceAsset({id:crypto.randomUUID(),type:'image',url:log.mediaUrl,label:asReference?'Reference image':'Starting image',parameterKey:firstImageParameter(candidate,next)?.key});
     setInspected(null);setLeftPaneOpen(true);
   };
+  const useProductionAsset = (asset: ProductionAsset, action: 'animate' | 'reference' | 'input' | 'send') => {
+    if (action === 'send') {if (asset.kind === 'video') handleGrabVideoFrame(asset.url); else if (asset.kind === 'image') setTransferImage(asset.url); return;}
+    if (asset.kind === 'image' && action !== 'input') {
+      animateImage({mediaUrl: asset.url} as GenerationLog, action === 'reference');
+      return;
+    }
+    const accepts = (model: AIModel) => !resolveModel(model)?.unavailableReason && model.category !== 'text-to-audio' &&
+      (asset.kind === 'image' && model.supportsImageUpload || asset.kind === 'video' && model.supportsVideoUpload ||
+        (model.params || []).some(p => p.type === 'file' && p.accept?.includes(asset.kind)));
+    const candidate = accepts(selectedModel) ? selectedModel : SUPPORTED_MODELS.find(accepts);
+    if (!candidate) {alert(`No enabled model accepts ${asset.kind} inputs.`); return;}
+    const parameter = candidate.params?.find(p => p.type === 'file' && p.accept?.includes(asset.kind));
+    selectModel(candidate); setPage(candidate.category.includes('video') ? 'Video' : 'Image'); setActiveLogId(null);
+    setSourceAsset({id:crypto.randomUUID(), type:asset.kind, url:asset.url, label:asset.name,
+      parameterKey: asset.kind === 'audio' || !(asset.kind === 'image' ? candidate.supportsImageUpload : candidate.supportsVideoUpload) ? parameter?.key : undefined});
+    setInspected(null);
+  };
   return (
     <div className="flex h-screen bg-neutral-950 text-neutral-100 font-sans overflow-hidden">
       <aside className="flex w-20 sm:w-48 shrink-0 flex-col border-r border-neutral-800 bg-neutral-900/60 p-3">
         <div className="px-2 py-5 font-semibold text-violet-300"><span className="sm:hidden">Kai</span><span className="hidden sm:inline">Kai Media Studio</span></div>
-        <nav className="flex flex-col gap-2">{['Home','Image','Video','Audio','Library','Projects','Settings'].map(item => <button key={item} onClick={() => {
+        <nav className="flex flex-col gap-2">{['Home','Image','Video','Audio','Studio','Library','Projects','Settings'].map(item => <button key={item} onClick={() => {
           if(item === 'Settings') {setShowSettings(true);return;}
           if(item === 'Image' || item === 'Video' || item === 'Audio')openCreationSection(item.toLowerCase() as StudioSection);else setPage(item);
         }} className={`text-left rounded-xl px-2 sm:px-3 py-3 text-xs sm:text-sm ${page===item ? 'bg-violet-500/15 text-violet-300':'text-neutral-400 hover:bg-neutral-800'}`}>{item}</button>)}</nav>
@@ -1090,17 +1046,39 @@ export default function App() {
           <div className="hidden p-2 text-xs text-neutral-500 sm:block">{currentProject?.name || 'Creative workspace'}</div>
         </div>
       </aside>
-      {leftPaneOpen && <ModelBrowser modality={page === 'Image' ? 'image' : page === 'Video' ? 'video' : page === 'Audio' ? 'audio' : undefined} initialWorkflow={workflow} hasReference={!!sourceAsset} onClose={()=>closePane('left')} onSelect={(model,nextWorkflow)=>{selectModel(model,nextWorkflow);setPage(model.category==='text-to-audio'?'Audio':model.category.includes('video')?'Video':'Image');if(sourceAsset?.type==='image'){const param=firstImageParameter(model,nextWorkflow);setSourceAsset({...sourceAsset,id:crypto.randomUUID(),parameterKey:param?.key});}closePane('left');}}/>}
+      {leftPaneOpen && <ModelBrowser modality={page === 'Image' ? 'image' : page === 'Video' ? 'video' : page === 'Audio' ? 'audio' : undefined} initialWorkflow={workflow} hasReference={!!sourceAsset} onClose={()=>closePane('left')} onSelect={(model,nextWorkflow)=>{
+        const role = sourceAsset?.imageRole || (sourceAsset?.parameterKey ? imageInputRole(sourceAsset.parameterKey) : undefined);
+        const target = role ? imageDestination(model, role) : undefined;
+        if (sourceAsset?.type === 'image' && role && !target) {alert(`This model does not accept the selected ${role === 'last' ? 'end frame' : role + ' image'}. Choose a compatible model or start a new creation.`); return;}
+        selectModel(model, target?.workflow || nextWorkflow);setPage(model.category==='text-to-audio'?'Audio':model.category.includes('video')?'Video':'Image');
+        if(sourceAsset?.type==='image')setSourceAsset({...sourceAsset,id:crypto.randomUUID(),parameterKey:target?.param?.key || (!role ? firstImageParameter(model,nextWorkflow)?.key : undefined)});
+        closePane('left');
+      }}/>}
       {/* Main Workspace */}
       <div className="flex-1 flex flex-col min-w-0 bg-neutral-950 relative">
-        {['Home','Library','Projects'].includes(page) ? <div className="overflow-y-auto flex-1 p-5 sm:p-10">
+        {['Home','Library','Projects','Studio'].includes(page) ? <div className="overflow-y-auto flex-1 p-5 sm:p-10">
           <div className="flex items-center justify-between mb-8"><h1 className="text-2xl font-semibold">{page === 'Home' ? 'What will you create today?' : page}</h1><button className="text-sm text-neutral-400" onClick={()=>openPane('right')}>Activity · {logs.filter(l=>l.status==='generating').length}</button></div>
           {page === 'Home' && <div className="grid sm:grid-cols-3 gap-4 mb-10">{(['Image','Video','Audio'] as const).map(item=><button key={item} className="text-left p-7 rounded-2xl border border-violet-500/20 bg-gradient-to-br from-violet-500/15 to-neutral-900" onClick={()=>openCreationSection(item.toLowerCase() as StudioSection)}><h2 className="text-xl">Create {item}</h2><p className="text-sm text-neutral-400 mt-2">{item==='Image'?'Explore a visual idea, edit or build a reference.':item==='Video'?'Bring a scene or still image to life.':'Turn a script into directed speech.'}</p></button>)}</div>}
           {page === 'Home' && <section className="mb-8"><div className="flex justify-between mb-3"><h2 className="text-neutral-300">Your projects</h2><button className="text-violet-300 text-sm" onClick={()=>setProjectDialog({mode:'create',name:'New project'})}>+ New project</button></div><div className="flex gap-3 flex-wrap">{projects.map(p=><button key={p.id} className={`rounded-lg border px-4 py-3 text-sm ${p.id===currentProjectId?'border-violet-500 text-violet-200':'border-neutral-800'}`} onClick={()=>setCurrentProjectId(p.id)}>{p.name}</button>)}</div></section>}
+          {page === 'Studio' && (currentProjectId && loadedProjectId === currentProjectId && historyLoaded ? <div key={currentProjectId}><ProductionStudio projectId={currentProjectId} logs={logs} onGenerate={handleGenerate}/></div> : <p>Open a project to use Studio.</p>)}
           {page === 'Projects' && <section><div className="flex items-center justify-between gap-4 mb-5"><div><h2 className="text-lg text-neutral-200">Project backups</h2><p className="text-sm text-neutral-500 mt-1">Export before clearing to keep the project history and original media together.</p></div><button className="rounded-lg bg-violet-500 px-4 py-2 text-sm font-medium text-white hover:bg-violet-400" onClick={()=>setProjectDialog({mode:'create',name:'New project'})}>+ New project</button></div><div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">{projects.map(project=><article key={project.id} className={`rounded-xl border p-5 ${project.id===currentProjectId?'border-violet-500/70 bg-violet-500/5':'border-neutral-800 bg-neutral-900'}`}><div className="mb-5"><h3 className="font-medium text-neutral-100">{project.name}</h3><p className="mt-1 text-xs text-neutral-500">Updated {new Date(project.updatedAt).toLocaleString()}</p>{project.id===currentProjectId&&<span className="mt-3 inline-block rounded-full bg-violet-500/15 px-2 py-1 text-xs text-violet-300">Open now</span>}</div><div className="grid grid-cols-2 gap-2"><button className="rounded-lg border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-800" onClick={()=>setCurrentProjectId(project.id)}>Open</button><button className="rounded-lg border border-neutral-700 px-3 py-2 text-sm hover:bg-neutral-800" onClick={()=>setProjectDialog({mode:'rename',name:project.name,projectId:project.id})}><Edit3 className="mr-2 inline h-3.5 w-3.5"/>Rename</button><button className="rounded-lg bg-violet-500/15 px-3 py-2 text-sm text-violet-200 hover:bg-violet-500/25" onClick={()=>handleExportProject(project)}><Download className="mr-2 inline h-3.5 w-3.5"/>Export backup</button><button className="rounded-lg border border-red-500/30 px-3 py-2 text-sm text-red-300 hover:bg-red-500/10" onClick={()=>handleClearProject(project)}><Trash2 className="mr-2 inline h-3.5 w-3.5"/>Clear</button></div></article>)}</div></section>}
-          {page !== 'Projects' && <><h2 className="mb-4 text-neutral-300">{page==='Library'?'Project library':'Recent generations'}</h2><LibraryGallery logs={logs} onInspect={log=>{setActiveLogId(log.id);setInspected(log);}} onAnimate={log=>animateImage(log)} onReference={log=>animateImage(log,true)} onDelete={handleDeleteLogs} onExport={handleExportLogs}/></>}
+          {page === 'Library' && <><h2 className="mb-4 text-neutral-300">Project library</h2>{currentProjectId && loadedProjectId === currentProjectId && historyLoaded ? <div key={currentProjectId}><ProductionLibrary projectId={currentProjectId} logs={logs} onUse={useProductionAsset} onUseVideoFrame={handleGrabVideoFrame} onHistoryChanged={(serverLogs, changedIds) => {
+            const projectId = currentProjectId;
+            const changed = new Set(changedIds);
+            const updates = new Map(serverLogs.filter(log => changed.has(log.id)).map(log => [log.id, log]));
+            for (const id of changed) {
+              if (updates.has(id)) persistedLogSignaturesRef.current.set(id, JSON.stringify(updates.get(id)));
+              else {persistedLogSignaturesRef.current.delete(id); cancelledLogKeysRef.current.add(logKey(projectId, id));}
+            }
+            setLogs(current => current.flatMap(log => !changed.has(log.id) ? [log] : updates.has(log.id) ? [updates.get(log.id)!] : []));
+            setActiveLogId(null);
+          }}/></div> : <p className="text-neutral-500">{currentProjectId ? 'Loading project…' : 'Open a project to use its library.'}</p>}</>}
+          {page === 'Home' && <><h2 className="mb-4 text-neutral-300">Recent generations</h2><LibraryGallery logs={logs} onInspect={log=>{setActiveLogId(log.id);setInspected(log);}} onAnimate={log=>animateImage(log)} onReference={log=>animateImage(log,true)} onDelete={handleDeleteLogs} onExport={handleExportLogs}/></>}
           {page==='Home' && <p className="text-xs text-neutral-500 mt-8">{logs.length} generations in this project</p>}
         </div> : page==='Audio' ? <AudioWorkspace model={selectedModel} latestLog={activeLog} isSubmitting={isCreateTaskPending} onGenerate={handleGenerate} onOpenModelPane={()=>openPane('left')} onOpenActivityPane={()=>openPane('right')} onStartNew={()=>setActiveLogId(null)}/> : <MediaWorkspace
+          projectId={currentProjectId}
+          onUseVideoFrame={handleGrabVideoFrame}
+          onUseImage={url => setTransferImage(url)}
           workflow={workflow}
           onWorkflowChange={chooseWorkflow}
           selectedModel={selectedModel} 
@@ -1115,7 +1093,7 @@ export default function App() {
           onRevealFile={handleRevealFile}
           remix={remix}
           onInspect={()=>activeLog && setInspected(activeLog)}
-          onStartNew={()=>setActiveLogId(null)}
+          onStartNew={()=>{setActiveLogId(null);setSourceAsset(null);}}
         />}
       </div>
 
@@ -1285,16 +1263,13 @@ export default function App() {
 
       {inspected && <div className="fixed inset-0 z-50 bg-black/90 flex flex-col p-5" role="dialog" aria-modal="true" aria-label="Result inspector" onKeyDown={e=>{if(e.key==='Escape')setInspected(null);}}>
         <div className="flex justify-between items-center mb-3"><h2>{inspected.modelName}</h2><button autoFocus onClick={()=>setInspected(null)} aria-label="Close result inspector">✕ Close</button></div>
-        <div className="min-h-0 flex-1 flex justify-center items-center">{inspected.mediaUrl ? inspected.type==='video'?<video controls src={inspected.mediaUrl} className="max-h-full max-w-full"/>:inspected.type==='audio'?<audio controls src={inspected.mediaUrl} className="w-full max-w-2xl"/>:<img src={inspected.mediaUrl} alt={inspected.prompt} className="max-h-full max-w-full object-contain"/>:<p>{inspected.error || 'Generation in progress'}</p>}</div>
+        <div className="min-h-0 flex-1 flex justify-center items-center">{inspected.mediaUrl ? inspected.type==='video'?<video ref={inspectorVideoRef} controls src={inspected.mediaUrl} className="max-h-full max-w-full"/>:inspected.type==='audio'?<audio controls src={inspected.mediaUrl} className="w-full max-w-2xl"/>:<img src={inspected.mediaUrl} alt={inspected.prompt} className="max-h-full max-w-full object-contain"/>:<p>{inspected.error || 'Generation in progress'}</p>}</div>
         <p className="text-sm text-neutral-400 my-3">{inspected.prompt}</p>
         <div className="flex gap-3 flex-wrap text-sm">
           {inspected.mediaUrl && <a className="px-3 py-2 rounded bg-neutral-800" href={`/api/download?url=${encodeURIComponent(inspected.mediaUrl)}&filename=${inspected.id}.${inspected.type==='video'?'mp4':inspected.type==='audio'?'mp3':'png'}`}>Download</a>}
           <button className="px-3 py-2 rounded bg-neutral-800" onClick={()=>{const m=SUPPORTED_MODELS.find(m=>m.id===inspected.modelId);if(m)selectModel(m);setPage(inspected.type==='video'?'Video':inspected.type==='audio'?'Audio':'Image');setRemix({id:crypto.randomUUID(),prompt:inspected.prompt,settings:inspected.settingsSnapshot || {}});setInspected(null);}}>Remix</button>
-          {inspected.mediaUrl && inspected.type==='image' && ['Use as Reference','Edit','Animate','Use as First Frame','Use as Last Frame','Upscale'].map(action=>{
-            const candidate=SUPPORTED_MODELS.find(m=>action==='Upscale'? /upscale/i.test(m.name):action==='Use as Last Frame'? (m.params || []).some(p=>/last_frame|end_frame|tail_image/.test(p.key)):action==='Animate'||action==='Use as First Frame'?m.category==='image-to-video'&&m.supportsImageUpload:m.category==='image-to-image'&&m.supportsImageUpload);
-            if(!candidate)return null;
-            return <button key={action} className="px-3 py-2 rounded bg-violet-500/20 text-violet-200" onClick={()=>{if(action==='Animate'){animateImage(inspected);return;}if(action==='Use as Reference'){animateImage(inspected,true);return;}selectModel(candidate,action==='Use as Last Frame'?'frames':primaryWorkflow(candidate));setPage(candidate.category.includes('video')?'Video':'Image');setSourceAsset({id:crypto.randomUUID(),type:'image',url:inspected.mediaUrl!,label:action,...(action==='Use as Last Frame'?{parameterKey:candidate.params?.find(p=>/last_frame|end_frame|tail_image/.test(p.key))?.key}:{})});setInspected(null);}}>{action}</button>;
-          })}
+          {inspected.mediaUrl && inspected.type === 'video' && <button className="rounded bg-violet-500/20 px-3 py-2 text-violet-200" onClick={() => {inspectorVideoRef.current?.pause(); handleGrabVideoFrame(inspected.mediaUrl!, inspectorVideoRef.current?.currentTime || 0);}}>Use video frame…</button>}
+          {inspected.mediaUrl && inspected.type === 'image' && <button className="rounded bg-violet-500/20 px-3 py-2 text-violet-200" onClick={() => {setTransferImage(inspected.mediaUrl!); setInspected(null);}}>Send image to model…</button>}
         </div>
       </div>}
       <SettingsModal
@@ -1309,76 +1284,14 @@ export default function App() {
         }}
       />
 
-      {frameGrabber && (
-        <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-6">
-          <div className="w-full max-w-3xl rounded-xl border border-neutral-800 bg-neutral-950 shadow-2xl overflow-hidden">
-            <div className="px-5 py-4 border-b border-neutral-800 flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-semibold text-neutral-100">Grab Video Frame</h3>
-                <p className="text-xs text-neutral-500 mt-1">Choose the frame time, then set it as the image source.</p>
-              </div>
-              <button
-                onClick={() => setFrameGrabber(null)}
-                className="p-2 rounded-md text-neutral-500 hover:text-white hover:bg-neutral-800"
-                title="Close"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-            <div className="p-5 space-y-4">
-              <video
-                ref={frameVideoRef}
-                src={frameGrabber.url}
-                className="w-full max-h-[55vh] rounded-lg bg-black object-contain"
-                controls
-                preload="metadata"
-                onLoadedMetadata={(event) => {
-                  const duration = Number.isFinite(event.currentTarget.duration) ? event.currentTarget.duration : 0;
-                  setFrameGrabber((current) => current ? { ...current, duration, time: Math.min(current.time, duration) } : current);
-                }}
-                onTimeUpdate={(event) => {
-                  const currentTime = event.currentTarget.currentTime;
-                  setFrameGrabber((current) => current ? { ...current, time: currentTime } : current);
-                }}
-              />
-              <div className="flex items-center gap-3">
-                <input
-                  type="range"
-                  min={0}
-                  max={Math.max(frameGrabber.duration, 0)}
-                  step={0.05}
-                  value={frameGrabber.time}
-                  onChange={(event) => {
-                    const nextTime = Number(event.target.value);
-                    if (frameVideoRef.current) {
-                      frameVideoRef.current.currentTime = nextTime;
-                    }
-                    setFrameGrabber((current) => current ? { ...current, time: nextTime } : current);
-                  }}
-                  className="flex-1 accent-indigo-500"
-                />
-                <div className="w-24 text-right text-xs font-mono text-neutral-400">
-                  {frameGrabber.time.toFixed(2)}s
-                </div>
-              </div>
-              <div className="flex justify-end gap-2">
-                <button
-                  onClick={() => setFrameGrabber(null)}
-                  className="px-4 py-2 rounded-lg border border-neutral-800 text-sm text-neutral-400 hover:bg-neutral-900 hover:text-neutral-200"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={captureFrameAtTime}
-                  className="px-4 py-2 rounded-lg bg-indigo-500 text-sm font-medium text-white hover:bg-indigo-400"
-                >
-                  Use Frame
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+      {frameGrabber && <MediaSourcePicker projectId={currentProjectId} title="Pick a video frame" initialVideo={frameGrabber} onClose={() => setFrameGrabber(null)} onChoose={url => {setFrameGrabber(null); setTransferImage(url);}}/>}
+      {transferImage && <ImageDestinationDialog url={transferImage} models={SUPPORTED_MODELS} selectedModel={selectedModel} onClose={() => setTransferImage(null)} onChoose={(model, role) => {
+        const target = imageDestination(model, role);
+        if (!target) return;
+        selectModel(model, target.workflow); setPage(model.category.includes('video') ? 'Video' : 'Image');
+        setSourceAsset({id: crypto.randomUUID(), type: 'image', url: transferImage, parameterKey: target.param?.key, imageRole: role, label: role});
+        setTransferImage(null); setInspected(null); setRightPaneOpen(false);
+      }}/>}
     </div>
   );
 }

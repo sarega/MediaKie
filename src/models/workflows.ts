@@ -32,6 +32,6 @@ export function supportsWorkflow(model:AIModel, workflow:Workflow) {
 }
 export function firstImageParameter(model:AIModel, workflow:Workflow) {
  const imageParams=(model.params||[]).filter(p=>p.type==='file' && p.accept?.includes('image'));
- if(workflow==='reference')return imageParams.find(p=>/reference/.test(p.key));
+ if(workflow==='reference')return imageParams.find(p=>/reference/.test(p.key)) || (primaryWorkflow(model)==='reference' ? imageParams[0] : undefined);
  return imageParams.find(p=>/first_frame|start_frame/.test(p.key)) || (!model.supportsImageUpload ? imageParams.find(p=>!/last_frame|end_frame|mask/.test(p.key)) : undefined);
 }

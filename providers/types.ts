@@ -11,6 +11,8 @@ export interface ProviderResult {
     finalCost?: Cost;
 }
 export interface Job extends ProviderResult {
+    productionShotId?: string;
+    sourceMediaUrls?: string[];
     historyId?: string;
     hidden?: boolean;
     id: string;
@@ -61,6 +63,6 @@ export function mediaUrls(value: any): string[] {
     if (Array.isArray(value))
         return value.flatMap(mediaUrls);
     if (typeof value === 'object')
-        return [...new Set(['url', 'resultUrls', 'urls', 'imageUrls', 'images', 'videoUrls', 'videos', 'video', 'audio', 'audios', 'output', 'response'].flatMap(k => mediaUrls(value[k])))];
+        return [...new Set(['url', 'resultUrl', 'resultUrls', 'result_urls', 'urls', 'imageUrls', 'images', 'videoUrls', 'videos', 'video', 'audio', 'audios', 'output', 'response', 'data'].flatMap(k => mediaUrls(value[k])))];
     return [];
 }

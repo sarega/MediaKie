@@ -11,6 +11,8 @@ import dotenv from 'dotenv';
 import {createThumbnailer} from './providers/thumbnails';
 import { installProviders } from './providers/service';
 import {installH3Enhancer} from './providers/h3-ir';
+import {installProductionLibrary} from './providers/production-library';
+import {installProductionExport} from './providers/production-export';
 
 dotenv.config({ path: ['.env.local', '.env'] });
 
@@ -370,18 +372,36 @@ async function startServer() {
   };
 
   const removeUnreferencedMedia = async (projectId: string, removedLogs: any[], remainingLogs: any[]) => {
-    const remainingUrls = new Set(remainingLogs.flatMap(mediaUrlsFromLog));
+    const retained = await productionLibrary.removeHistoryAssets(projectId, removedLogs, remainingLogs);
+    const remainingUrls = new Set([...remainingLogs.flatMap(mediaUrlsFromLog), ...retained]);
+    const remainingFiles = new Set([...remainingUrls].map(url => resolveLibraryFile(url, projectId)).filter(Boolean));
     for (const log of removedLogs) {
       for (const mediaUrl of mediaUrlsFromLog(log)) {
         if (remainingUrls.has(mediaUrl)) continue;
         const filePath = resolveLibraryFile(mediaUrl, projectId);
         if (!filePath) continue;
+        if (remainingFiles.has(filePath)) continue;
         const relativePath = path.relative(getProjectLibraryDir(projectId), filePath);
         if (relativePath.startsWith('..') || path.isAbsolute(relativePath)) continue;
         await fs.unlink(filePath).catch(() => {});
       }
     }
   };
+
+  const productionLibrary = installProductionLibrary(app, {
+    projectDir: getProjectDir, libraryDir: getProjectLibraryDir, libraryUrl: libraryUrlFor,
+    projectId: safeProjectId, readHistory, writeHistoryFile, lock: withHistoryWrite,
+    resolveFile: resolveLocalLibraryFile, hideJobs: (id, ids) => ids.length ? providerService.hideProjectJobs(id, ids) : Promise.resolve(),
+    inputReferences: async () => {
+      const ids = (await fs.readdir(projectsDir)).filter(id => safeProjectId(id));
+      const histories = await Promise.all(ids.map(async projectId => (await readHistory(projectId)).map((log: any) => ({...log, projectId}))));
+      return [...providerService.inputReferences(), ...histories.flat()];
+    },
+  });
+  const libraryErrors = (handler: (req: any, res: any) => Promise<any>) => (req: any, res: any) => {
+    handler(req, res).catch((error: any) => res.status(error.status || 500).json({error: error.message || 'Unable to update project library'}));
+  };
+  installProductionExport(app, {projectId:safeProjectId,libraryDir:getProjectLibraryDir,libraryUrl:libraryUrlFor,resolveFile:resolveLocalLibraryFile,lock:withHistoryWrite,reconcile:productionLibrary.reconcile,write:productionLibrary.write});
 
   const thumbnailFor = createThumbnailer(path.join(dataDir, 'thumbnails'));
   app.get('/api/media/thumbnail', async (req, res) => {
@@ -452,7 +472,8 @@ async function startServer() {
     const archivePath = path.join(tempDir, 'project.zip');
     try {
       await withHistoryWrite(projectId, async () => {
-        await execFileAsync('zip', ['-r', '-q', archivePath, 'project.json', 'history.json', 'library'], {
+        await productionLibrary.reconcile(projectId);
+        await execFileAsync('zip', ['-r', '-q', archivePath, 'project.json', 'history.json', 'production.json', 'library'], {
           cwd: getProjectDir(projectId),
         });
       });
@@ -543,39 +564,39 @@ async function startServer() {
     res.json({ ok: true });
   });
 
-  app.delete('/api/projects/:projectId/history', async (req, res) => {
+  app.delete('/api/projects/:projectId/history', libraryErrors(async (req, res) => {
     const projectId = safeProjectId(req.params.projectId);
     if (!projectId) return res.status(400).json({ error: 'Invalid project id' });
 
-    await providerService.hideProjectJobs(projectId);
     await withHistoryWrite(projectId, async () => {
       const currentLogs = await readHistory(projectId);
       await removeUnreferencedMedia(projectId, currentLogs, []);
+      await providerService.hideProjectJobs(projectId);
       await writeHistoryFile(projectId, []);
     });
     res.json({ logs: [] });
-  });
+  }));
 
-  app.post('/api/projects/:projectId/history/delete-many', async (req, res) => {
+  app.post('/api/projects/:projectId/history/delete-many', libraryErrors(async (req, res) => {
     const projectId = safeProjectId(req.params.projectId);
     const logIds = selectedLogIds(req.body?.logIds);
     if (!projectId) return res.status(400).json({ error: 'Invalid project id' });
     if (logIds.length === 0) return res.status(400).json({ error: 'Select at least one library item' });
 
-    await providerService.hideProjectJobs(projectId, logIds);
     const nextLogs = await withHistoryWrite(projectId, async () => {
       const logs = await readHistory(projectId);
       const selected = new Set(logIds);
       const removed = logs.filter((log: any) => selected.has(log.id));
       const remaining = logs.filter((log: any) => !selected.has(log.id));
       await removeUnreferencedMedia(projectId, removed, remaining);
+      await providerService.hideProjectJobs(projectId, logIds);
       await writeHistoryFile(projectId, remaining);
       return remaining;
     });
     res.json({ logs: nextLogs, deleted: logIds.length });
-  });
+  }));
 
-  app.delete('/api/projects/:projectId/history/:id', async (req, res) => {
+  app.delete('/api/projects/:projectId/history/:id', libraryErrors(async (req, res) => {
     const projectId = safeProjectId(req.params.projectId);
     if (!projectId) return res.status(400).json({ error: 'Invalid project id' });
 
@@ -584,11 +605,12 @@ async function startServer() {
       const removed = logs.filter((log: any) => log.id === req.params.id);
       const nextLogs = logs.filter((log: any) => log.id !== req.params.id);
       await removeUnreferencedMedia(projectId, removed, nextLogs);
+      await providerService.hideProjectJobs(projectId, [req.params.id]);
       await writeHistoryFile(projectId, nextLogs);
       return nextLogs;
     });
     res.json({ logs: nextLogs });
-  });
+  }));
 
   app.post('/api/projects/:projectId/library/save-url', async (req, res) => {
     try {
@@ -634,7 +656,7 @@ async function startServer() {
     res.json({ ok: true });
   });
 
-  app.delete('/api/history/:id', async (req, res) => {
+  app.delete('/api/history/:id', libraryErrors(async (req, res) => {
     const nextLogs = await withHistoryWrite(defaultProjectId, async () => {
       const logs = await readHistory(defaultProjectId);
       const removed = logs.filter((log: any) => log.id === req.params.id);
@@ -644,7 +666,7 @@ async function startServer() {
       return nextLogs;
     });
     res.json({ logs: nextLogs });
-  });
+  }));
 
   app.post('/api/library/save-url', async (req, res) => {
     try {

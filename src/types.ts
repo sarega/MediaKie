@@ -19,7 +19,7 @@ export interface ModelParamConfig {
 }
 
 export interface AIModel {
-  id: string; // The API model name (e.g., 'wan-2.2', 'v-veo-3.1', 'gemini-omni')
+  id: string; // Stable local ID; provider mappings hold the current API model name.
   name: string; // Display name
   provider: string; // e.g., 'Wan', 'Google', 'Kling'
   category: ModelCategory;
@@ -40,6 +40,8 @@ export interface AIModel {
   creditEstimator?: {
     label?: string;
     baseCredits?: number;
+    creditsPerThousandCharacters?: number;
+    sourceVideoDurationOnly?: boolean;
     creditsByParam?: {
       key: string;
       values: Record<string, number>;
@@ -76,6 +78,7 @@ export interface AIModel {
     };
     sourceVideoParamKeys?: string[];
     billsSourceVideoDuration?: boolean;
+    minimumSourceDurationIsOutput?: boolean;
     minimumCredits?: number;
     round?: 'ceil' | 'round';
   };
@@ -125,10 +128,12 @@ export const estimateModelCredits = (
     credits = estimator.creditsByParamCombo.values[paramKey] ?? estimator.creditsByParamCombo.fallback ?? credits;
   }
 
-  const outputDuration = Number(params.duration ?? 1);
+  if ((estimator.billsSourceVideoDuration && hasSourceVideo || estimator.sourceVideoDurationOnly) && (!Number.isFinite(sourceVideoDurationSeconds) || Number(sourceVideoDurationSeconds) <= 0)) return null;
+  if (Number(params.duration) === -1) return null; // Auto duration is only known after generation.
+  const outputDuration = estimator.sourceVideoDurationOnly ? Number(sourceVideoDurationSeconds) : Number(params.duration ?? params.extend_times ?? 1);
   const billedDuration = outputDuration + (
     hasSourceVideo && estimator.billsSourceVideoDuration && Number.isFinite(sourceVideoDurationSeconds)
-      ? Math.max(0, Number(sourceVideoDurationSeconds))
+      ? Math.max(estimator.minimumSourceDurationIsOutput ? outputDuration : 0, Number(sourceVideoDurationSeconds))
       : 0
   );
 
@@ -172,6 +177,11 @@ export const estimateModelCredits = (
     if (creditsWithVideo !== undefined) credits = creditsWithVideo;
   }
 
+  if (estimator.creditsPerThousandCharacters !== undefined) {
+    const text = params.prompt || params.text;
+    if (typeof text !== 'string' || !text.length) return null;
+    credits = [...text].length / 1000 * estimator.creditsPerThousandCharacters;
+  }
   if (credits === null) return null;
   if (estimator.multiplierByParam) {
     const paramValue = String(params[estimator.multiplierByParam.key] ?? '');
@@ -199,7 +209,7 @@ export const estimateModelCredits = (
     credits = Math.max(estimator.minimumCredits, credits);
   }
 
-  return estimator.round === 'round' ? Math.round(credits) : Math.ceil(credits);
+  return estimator.round === 'ceil' ? Math.ceil(credits) : estimator.round === 'round' ? Math.round(credits) : Number(credits.toFixed(6));
 };
 
 // Common Parameters
@@ -258,7 +268,7 @@ const seedream45TextToImageParams: ModelParamConfig[] = [
 ];
 
 const seedream5ProParams: ModelParamConfig[] = [
-  { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: [{ label: '1:1', value: '1:1' }, { label: '4:3', value: '4:3' }, { label: '3:4', value: '3:4' }, { label: '16:9', value: '16:9' }, { label: '9:16', value: '9:16' }, { label: '2:3', value: '2:3' }, { label: '3:2', value: '3:2' }], defaultValue: '1:1' },
+  { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: [{ label: '1:1', value: '1:1' }, { label: '4:3', value: '4:3' }, { label: '3:4', value: '3:4' }, { label: '16:9', value: '16:9' }, { label: '9:16', value: '9:16' }, { label: '2:3', value: '2:3' }, { label: '3:2', value: '3:2' }, {label:'21:9',value:'21:9'}], defaultValue: '1:1' },
   { name: 'Quality', key: 'quality', type: 'select', options: [{ label: 'Basic (1K)', value: 'basic' }, { label: 'High (2K)', value: 'high' }], defaultValue: 'basic' },
   { name: 'Output Format', key: 'output_format', type: 'select', options: [{ label: 'PNG', value: 'png' }, { label: 'JPEG', value: 'jpeg' }], defaultValue: 'png' },
   { name: 'NSFW Checker', key: 'nsfw_checker', type: 'boolean', defaultValue: true }
@@ -424,6 +434,30 @@ const minimaxH3ReferenceParams: ModelParamConfig[] = [
   { name: 'Resolution', key: 'resolution', type: 'select', options: [{ label: '768P', value: '768P' }, { label: '2K', value: '2K' }], defaultValue: '2K' },
 ];
 
+const kling40Params: ModelParamConfig[] = [
+  { name: 'Duration', key: 'duration', type: 'slider', min: 3, max: 30, step: 1, defaultValue: 5 },
+  { name: 'Resolution', key: 'resolution', type: 'select', options: ['720p', '1080p'].map(value => ({label: value, value})), defaultValue: '720p' },
+  { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: ['auto', '16:9', '9:16', '1:1', '21:9'].map(value => ({label: value, value})), defaultValue: 'auto' },
+];
+const kling40KeyframeParams: ModelParamConfig[] = [
+  ...kling40Params,
+  { name: 'First frame', key: 'first_frame_url', type: 'file', accept: 'image/*', defaultValue: '' },
+  { name: 'Middle keyframes (in order)', key: 'keyframe_urls', type: 'file', accept: 'image/*', multiple: true, maxFiles: 8, defaultValue: [], description: 'Mention @keyframe_1, etc. Total frames cannot exceed duration + 1 or 10.' },
+  { name: 'Last frame', key: 'last_frame_url', type: 'file', accept: 'image/*', defaultValue: '' },
+];
+const kling40ReferenceParams: ModelParamConfig[] = [
+  ...kling40Params,
+  { name: 'Reference images', key: 'image_urls', type: 'file', accept: 'image/*', multiple: true, maxFiles: 10, defaultValue: [], description: 'Mention @image_1, @image_2, etc. in the prompt.' },
+  { name: 'Reference videos', key: 'video_urls', type: 'file', accept: 'video/*', multiple: true, maxFiles: 5, defaultValue: [], description: 'Each clip must be 2–30 seconds. Mention @video_1, etc. Video input changes billing; unknown total source duration shows no estimate.' },
+  { name: 'Keep original sound', key: 'keep_original_sound', type: 'boolean', defaultValue: false },
+];
+const kling40CreditEstimator: AIModel['creditEstimator'] = {
+  label: 'Kie public pricing, verified 2026-11-03; video input bills max(total input, output) + output seconds',
+  creditsPerSecondByResolution: {'720p': 28.5, '1080p': 42.5},
+  creditsPerSecondByResolutionWithVideoInput: {'720p': 17, '1080p': 25.5},
+  sourceVideoParamKeys: ['video_urls'], billsSourceVideoDuration: true, minimumSourceDurationIsOutput: true,
+};
+
 const kling30Params: ModelParamConfig[] = [
   { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: aspectRatioOptions, defaultValue: '16:9' },
   { name: 'Duration', key: 'duration', type: 'select', options: [{ label: '3s', value: '3' }, { label: '5s', value: '5' }, { label: '10s', value: '10' }, { label: '15s', value: '15' }], defaultValue: '5' },
@@ -486,7 +520,7 @@ const veo31Params: ModelParamConfig[] = [
   { name: 'Generation Type', key: 'generationType', type: 'select', options: [{ label: 'Text to Video', value: 'TEXT_2_VIDEO' }, { label: 'Image to Video', value: 'FIRST_AND_LAST_FRAMES_2_VIDEO' }, { label: 'Reference to Video', value: 'REFERENCE_2_VIDEO' }], defaultValue: 'TEXT_2_VIDEO' },
   { name: 'Start Frame URL', key: 'veo_start_frame_url', type: 'file', accept: 'image/*', defaultValue: '' },
   { name: 'End Frame URL', key: 'veo_end_frame_url', type: 'file', accept: 'image/*', defaultValue: '' },
-  { name: 'Reference Image URL', key: 'veo_reference_image_urls', type: 'file', accept: 'image/*', defaultValue: '' },
+  { name: 'Reference Images', key: 'veo_reference_image_urls', type: 'file', accept: 'image/*', multiple:true,maxFiles:3,defaultValue:[] },
   { name: 'Aspect Ratio', key: 'aspectRatio', type: 'select', options: [{ label: 'Auto', value: 'auto' }, { label: '16:9', value: '16:9' }, { label: '9:16', value: '9:16' }], defaultValue: '16:9' },
   { name: 'Resolution', key: 'resolution', type: 'select', options: [{ label: '720p', value: '720p' }, { label: '1080p', value: '1080p' }, { label: '4k', value: '4k' }], defaultValue: '720p' },
   { name: 'Duration', key: 'duration', type: 'select', options: [{ label: '4s', value: '4' }, { label: '6s', value: '6' }, { label: '8s', value: '8' }], defaultValue: '8' },
@@ -494,7 +528,6 @@ const veo31Params: ModelParamConfig[] = [
   { name: 'Fallback', key: 'enableFallback', type: 'boolean', defaultValue: false },
   { name: 'Watermark', key: 'watermark', type: 'text', defaultValue: '' },
   { name: 'Callback URL', key: 'callBackUrl', type: 'text', defaultValue: '' },
-  { name: 'Seed', key: 'seeds', type: 'number', min: 10000, max: 2147483647, step: 1, defaultValue: 10000 }
 ];
 
 const veo31ExtendParams: ModelParamConfig[] = [
@@ -654,12 +687,27 @@ const grokImageToVideoParams: ModelParamConfig[] = [
   { name: 'Mode', key: 'mode', type: 'select', options: [{ label: 'Fun', value: 'fun' }, { label: 'Normal', value: 'normal' }, { label: 'Spicy', value: 'spicy' }], defaultValue: 'normal' },
   { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: [{ label: '2:3', value: '2:3' }, { label: '3:2', value: '3:2' }, { label: '1:1', value: '1:1' }, { label: '16:9', value: '16:9' }, { label: '9:16', value: '9:16' }], defaultValue: '16:9' },
   { name: 'Duration', key: 'duration', type: 'select', options: [{ label: '6s', value: '6' }, { label: '10s', value: '10' }], defaultValue: '6' },
-  { name: 'Resolution', key: 'resolution', type: 'select', options: [{ label: '480p', value: '480p' }, { label: '720p', value: '720p' }], defaultValue: '480p' }
+  { name: 'Resolution', key: 'resolution', type: 'select', options: [{ label: '480p', value: '480p' }, { label: '720p', value: '720p' }, {label:'1080p',value:'1080p'}], defaultValue: '480p' }
+];
+
+const grokUpscaleParams: ModelParamConfig[] = [
+  {name:'Source Task ID',key:'task_id',type:'text',defaultValue:''},
+  {name:'Output Resolution',key:'resolution',type:'select',options:['720p','1080p'].map(value=>({label:value,value})),defaultValue:'720p'},
+];
+const grokExtendParams: ModelParamConfig[] = [
+  {name:'Source Task ID',key:'task_id',type:'text',defaultValue:''},
+  {name:'Start time (seconds)',key:'extend_at',type:'number',min:2,step:0.1,defaultValue:2},
+  {name:'Extend by',key:'extend_times',type:'select',options:['6','10'].map(value=>({label:value+'s',value})),defaultValue:'6'},
+  {name:'Source Resolution (cost estimate)',key:'resolution',type:'select',options:['480p','720p'].map(value=>({label:value,value})),defaultValue:'480p'},
 ];
 
 const grokImagine15Params: ModelParamConfig[] = [
+  {name:'First Frame',key:'first_frame_url',type:'file',accept:'image/*',defaultValue:''},
+  {name:'Last Frame',key:'last_frame_url',type:'file',accept:'image/*',defaultValue:''},
+  {name:'Loop Frame',key:'loop_url',type:'file',accept:'image/*',defaultValue:''},
+  {name:'Generate Audio',key:'enable_audio',type:'boolean',defaultValue:true},
   { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: [{ label: 'Auto', value: 'auto' }, { label: '1:1', value: '1:1' }, { label: '16:9', value: '16:9' }, { label: '9:16', value: '9:16' }, { label: '4:3', value: '4:3' }, { label: '3:4', value: '3:4' }, { label: '3:2', value: '3:2' }, { label: '2:3', value: '2:3' }], defaultValue: 'auto' },
-  { name: 'Resolution', key: 'resolution', type: 'select', options: [{ label: '480p', value: '480p' }, { label: '720p', value: '720p' }], defaultValue: '480p' },
+  { name: 'Resolution', key: 'resolution', type: 'select', options: [{ label: '480p', value: '480p' }, { label: '720p', value: '720p' }, {label:'1080p',value:'1080p'}], defaultValue: '480p' },
   { name: 'Duration', key: 'duration', type: 'slider', min: 1, max: 15, step: 1, defaultValue: 8 },
   { name: 'NSFW Checker', key: 'nsfw_checker', type: 'boolean', defaultValue: true }
 ];
@@ -697,7 +745,7 @@ const seedance25Params: ModelParamConfig[] = [
   { name: 'Return Last Frame', key: 'return_last_frame', type: 'boolean', defaultValue: false },
   { name: 'Resolution', key: 'resolution', type: 'select', options: [{ label: '480p', value: '480p' }, { label: '720p', value: '720p' }, { label: '1080p', value: '1080p' }], defaultValue: '720p' },
   { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: [{ label: 'Adaptive', value: 'adaptive' }, ...aspectRatioOptions, { label: '4:3', value: '4:3' }, { label: '3:4', value: '3:4' }, { label: '21:9', value: '21:9' }], defaultValue: '16:9' },
-  { name: 'Duration', key: 'duration', type: 'slider', min: 1, max: 30, step: 1, defaultValue: 5 },
+  { name: 'Duration', key: 'duration', type: 'number', min: -1, max: 30, step: 1, defaultValue: 5, description:'4–30 seconds, or -1 for auto duration (cost unknown until completion).' },
   { name: 'Output Format', key: 'output_format', type: 'select', options: [{ label: 'MP4', value: 'mp4' }, { label: 'MOV', value: 'mov' }], defaultValue: 'mp4' },
   { name: 'Web Search', key: 'web_search', type: 'boolean', defaultValue: false },
   { name: 'NSFW Checker', key: 'nsfw_checker', type: 'boolean', defaultValue: true },
@@ -711,19 +759,14 @@ const happyHorse11Params: ModelParamConfig[] = [
 ];
 
 const grokVideoCreditEstimator: AIModel['creditEstimator'] = {
-  label: 'Estimated from public Kie pricing',
-  creditsPerSecondByResolution: {
-    '480p': 1.6,
-    '720p': 3,
-  },
-  round: 'ceil',
+  label: 'Kie public pricing, verified 2026-10-24',
+  creditsPerSecondByResolution: {'480p':2.4, '720p':4.5, '1080p':8},
 };
 
 const fixedCredits = (credits: number, label = 'Estimated from public Kie pricing', quantityParamKey?: string): AIModel['creditEstimator'] => ({
   label,
   baseCredits: credits,
   quantityParamKey,
-  round: 'ceil',
 });
 
 const imageResolutionCredits = (values: Record<string, number>): AIModel['creditEstimator'] => ({
@@ -732,7 +775,6 @@ const imageResolutionCredits = (values: Record<string, number>): AIModel['credit
     key: 'resolution',
     values,
   },
-  round: 'ceil',
 });
 
 const imageResolutionCreditsByImageResolution = (values: Record<string, number>, quantityParamKey?: string): AIModel['creditEstimator'] => ({
@@ -742,7 +784,6 @@ const imageResolutionCreditsByImageResolution = (values: Record<string, number>,
     values,
   },
   quantityParamKey,
-  round: 'ceil',
 });
 
 const seedream4CreditEstimator = imageResolutionCreditsByImageResolution({
@@ -756,23 +797,15 @@ const seedream45CreditEstimator = fixedCredits(6.5);
 const seedream5LiteCreditEstimator = fixedCredits(5.5);
 
 const seedream5ProCreditEstimator: AIModel['creditEstimator'] = {
-  label: 'Estimated from public Kie pricing',
-  creditsByParam: {
-    key: 'quality',
-    values: {
-      basic: 8,
-      high: 12,
-    },
-    fallback: 8,
-  },
-  round: 'ceil',
+  label: 'Kie public pricing, verified 2026-10-24',
+  creditsByParam: {key:'quality', values:{basic:7, high:14}},
 };
 
 const zImageCreditEstimator = fixedCredits(0.8);
 
 const nanoBananaClassicCreditEstimator = fixedCredits(4);
 
-const nanoBananaProCreditEstimator = fixedCredits(24);
+const nanoBananaProCreditEstimator = imageResolutionCredits({'1K':18, '2K':18, '4K':24});
 
 const nanoBanana2CreditEstimator = imageResolutionCredits({
   '1K': 8,
@@ -791,6 +824,10 @@ const flux2CreditEstimator = imageResolutionCredits({
   '2K': 7,
 });
 
+const flux2FlexCreditEstimator = imageResolutionCredits({'1K':14, '2K':24});
+const happyHorse10CreditEstimator: AIModel['creditEstimator'] = {creditsPerSecondByResolution:{'720p':28,'1080p':48}, label:'Kie public pricing, verified 2026-10-24'};
+const wan26FlashCreditEstimator: AIModel['creditEstimator'] = {creditsPerSecondByResolution:{'720p':4,'1080p':6},multiplierByParam:{key:'audio',values:{true:2,false:1}},label:'Kie public pricing, verified 2026-10-24'};
+
 const ideogramV3CreditEstimator: AIModel['creditEstimator'] = {
   label: 'Estimated from public Kie pricing',
   creditsByParam: {
@@ -802,8 +839,9 @@ const ideogramV3CreditEstimator: AIModel['creditEstimator'] = {
     },
   },
   quantityParamKey: 'num_images',
-  round: 'ceil',
 };
+
+const ideogramCharacterCreditEstimator: AIModel['creditEstimator'] = {creditsByParam:{key:'rendering_speed',values:{TURBO:12,BALANCED:18,QUALITY:24}},quantityParamKey:'num_images',label:'Kie public pricing, verified 2026-10-24'};
 
 const wan25VideoCreditEstimator: AIModel['creditEstimator'] = {
   label: 'Estimated from public Kie pricing',
@@ -811,7 +849,6 @@ const wan25VideoCreditEstimator: AIModel['creditEstimator'] = {
     '720p': 12,
     '1080p': 20,
   },
-  round: 'ceil',
 };
 
 const wan27VideoCreditEstimator: AIModel['creditEstimator'] = {
@@ -820,7 +857,6 @@ const wan27VideoCreditEstimator: AIModel['creditEstimator'] = {
     '720p': 16,
     '1080p': 24,
   },
-  round: 'ceil',
 };
 
 const wan30VideoCreditEstimator = (prime = false): AIModel['creditEstimator'] => ({
@@ -830,7 +866,6 @@ const wan30VideoCreditEstimator = (prime = false): AIModel['creditEstimator'] =>
     : { '480p': 8, '720p': 16, '1080p': 32 },
   sourceVideoParamKeys: ['reference_video_urls'],
   billsSourceVideoDuration: true,
-  round: 'ceil',
 });
 
 const geminiOmniFlash11CreditEstimator: AIModel['creditEstimator'] = {
@@ -862,7 +897,6 @@ const geminiOmniFlash11CreditEstimator: AIModel['creditEstimator'] = {
     '1080p': 168,
     '4k': 252,
   },
-  round: 'ceil',
 };
 
 const klingO3CreditEstimator: AIModel['creditEstimator'] = {
@@ -878,7 +912,6 @@ const klingO3CreditEstimator: AIModel['creditEstimator'] = {
       '4k|true': 67,
     },
   },
-  round: 'ceil',
 };
 
 const seedance25CreditEstimator: AIModel['creditEstimator'] = {
@@ -886,16 +919,15 @@ const seedance25CreditEstimator: AIModel['creditEstimator'] = {
   creditsPerSecondByResolution: {
     '480p': 28,
     '720p': 63,
-    '1080p': 114,
+    '1080p': 158,
   },
   creditsPerSecondByResolutionWithVideoInput: {
     '480p': 17,
     '720p': 38,
-    '1080p': 68.5,
+    '1080p': 95,
   },
   sourceVideoParamKeys: ['reference_video_urls'],
   billsSourceVideoDuration: true,
-  round: 'ceil',
 };
 
 const happyHorse11CreditEstimator: AIModel['creditEstimator'] = {
@@ -904,25 +936,24 @@ const happyHorse11CreditEstimator: AIModel['creditEstimator'] = {
     '720p': 22.5,
     '1080p': 29,
   },
-  round: 'ceil',
 };
 
 const seedanceV1LiteCreditEstimator: AIModel['creditEstimator'] = {
   label: 'Estimated from public Kie pricing',
   creditsPerSecondByResolution: {
+    '480p': 2,
     '720p': 4.5,
     '1080p': 10,
   },
-  round: 'ceil',
 };
 
 const seedanceV1ProCreditEstimator: AIModel['creditEstimator'] = {
   label: 'Estimated from public Kie pricing',
   creditsPerSecondByResolution: {
+    '480p': 2.8,
     '720p': 6,
     '1080p': 14,
   },
-  round: 'ceil',
 };
 
 const seedance15CreditEstimator: AIModel['creditEstimator'] = {
@@ -939,7 +970,6 @@ const seedance15CreditEstimator: AIModel['creditEstimator'] = {
       false: 1,
     },
   },
-  round: 'ceil',
 };
 
 const seedance2CreditEstimator: AIModel['creditEstimator'] = {
@@ -956,22 +986,20 @@ const seedance2CreditEstimator: AIModel['creditEstimator'] = {
   },
   sourceVideoParamKeys: ['reference_video_urls'],
   billsSourceVideoDuration: true,
-  round: 'ceil',
 };
 
 const seedance2MiniCreditEstimator: AIModel['creditEstimator'] = {
   label: 'Estimated from public Kie pricing',
   creditsPerSecondByResolution: {
-    '480p': 9.5,
-    '720p': 20.5,
+    '480p': 3.8,
+    '720p': 8.2,
   },
   creditsPerSecondByResolutionWithVideoInput: {
-    '480p': 6,
-    '720p': 12.5,
+    '480p': 2.4,
+    '720p': 5,
   },
   sourceVideoParamKeys: ['reference_video_urls'],
   billsSourceVideoDuration: true,
-  round: 'ceil',
 };
 
 const pixverseCreditEstimator: AIModel['creditEstimator'] = {
@@ -989,26 +1017,9 @@ const pixverseCreditEstimator: AIModel['creditEstimator'] = {
       '1080p|true': 18.4,
     },
   },
-  round: 'ceil',
 };
 
-const pixverseReferenceCreditEstimator: AIModel['creditEstimator'] = {
-  label: 'Estimated from public Kie pricing',
-  creditsPerSecondByParamCombo: {
-    keys: ['quality', 'generate_audio_switch'],
-    values: {
-      '360p|false': 4.5,
-      '360p|true': 6.3,
-      '540p|false': 6.3,
-      '540p|true': 8.1,
-      '720p|false': 8.1,
-      '720p|true': 10.8,
-      '1080p|false': 16.2,
-      '1080p|true': 20.7,
-    },
-  },
-  round: 'ceil',
-};
+const pixverseReferenceCreditEstimator = pixverseCreditEstimator;
 
 const minimaxH3CreditsPerSecondByResolution = {
   '768P': 8,
@@ -1019,7 +1030,6 @@ const minimaxH3CreditEstimator: AIModel['creditEstimator'] = {
   label: 'Estimated from public Kie pricing',
   creditsPerSecond: 13,
   creditsPerSecondByResolution: minimaxH3CreditsPerSecondByResolution,
-  round: 'ceil',
 };
 
 const minimaxH3ReferenceCreditEstimator: AIModel['creditEstimator'] = {
@@ -1033,25 +1043,21 @@ const minimaxH3ReferenceCreditEstimator: AIModel['creditEstimator'] = {
   },
   sourceVideoParamKeys: ['reference_video_urls'],
   billsSourceVideoDuration: true,
-  round: 'ceil',
 };
 
 const hailuo02StandardCreditEstimator: AIModel['creditEstimator'] = {
   label: 'Estimated from public Kie pricing',
   creditsPerSecond: 5,
-  round: 'ceil',
 };
 
 const hailuo02StandardImageCreditEstimator: AIModel['creditEstimator'] = {
   label: 'Estimated from public Kie pricing',
   creditsPerSecondByResolution: { '512P': 2, '768P': 5 },
-  round: 'ceil',
 };
 
 const hailuo02ProCreditEstimator: AIModel['creditEstimator'] = {
   label: 'Estimated from public Kie pricing',
   creditsPerSecond: 9.5,
-  round: 'ceil',
 };
 
 const hailuo23StandardCreditEstimator: AIModel['creditEstimator'] = {
@@ -1060,7 +1066,6 @@ const hailuo23StandardCreditEstimator: AIModel['creditEstimator'] = {
     keys: ['duration', 'resolution'],
     values: { '6|768P': 30, '10|768P': 50, '6|1080P': 50 },
   },
-  round: 'ceil',
 };
 
 const hailuo23ProCreditEstimator: AIModel['creditEstimator'] = {
@@ -1069,31 +1074,26 @@ const hailuo23ProCreditEstimator: AIModel['creditEstimator'] = {
     keys: ['duration', 'resolution'],
     values: { '6|768P': 45, '10|768P': 90, '6|1080P': 80 },
   },
-  round: 'ceil',
 };
 
 const kling25CreditEstimator: AIModel['creditEstimator'] = {
   label: 'Estimated from public Kie pricing',
   creditsPerSecond: 8.4,
-  round: 'ceil',
 };
 
 const kling21StandardCreditEstimator: AIModel['creditEstimator'] = {
   label: 'Estimated from public Kie pricing',
   creditsPerSecond: 5,
-  round: 'ceil',
 };
 
 const kling21ProCreditEstimator: AIModel['creditEstimator'] = {
   label: 'Estimated from public Kie pricing',
   creditsPerSecond: 10,
-  round: 'ceil',
 };
 
 const kling21MasterCreditEstimator: AIModel['creditEstimator'] = {
   label: 'Estimated from public Kie pricing',
   creditsPerSecond: 32,
-  round: 'ceil',
 };
 
 const wan26CreditEstimator: AIModel['creditEstimator'] = {
@@ -1101,11 +1101,10 @@ const wan26CreditEstimator: AIModel['creditEstimator'] = {
   creditsByParamCombo: {
     keys: ['duration', 'resolution'],
     values: {
-      '5|720p': 70, '10|720p': 140, '15|720p': 209.5,
-      '5|1080p': 104.5, '10|1080p': 209.5, '15|1080p': 315,
+      '5|720p': 70, '10|720p': 140, '15|720p': 210,
+      '5|1080p': 105, '10|1080p': 210, '15|1080p': 315,
     },
   },
-  round: 'ceil',
 };
 
 const wan27ImageCreditEstimator = fixedCredits(4.8, 'Estimated from public Kie pricing', 'n');
@@ -1117,19 +1116,19 @@ const qwenImageCreditEstimator: AIModel['creditEstimator'] = {
   creditsByParam: {
     key: 'image_size',
     values: {
-      square: 1.05,
-      square_hd: 4.2,
-      portrait_4_3: 3.15,
-      portrait_16_9: 2.36,
-      landscape_4_3: 3.15,
-      landscape_16_9: 2.36,
+      square: 1.048576,
+      square_hd: 4.194304,
+      portrait_4_3: 3.145728,
+      portrait_16_9: 2.359296,
+      landscape_4_3: 3.145728,
+      landscape_16_9: 2.359296,
     },
-    fallback: 4.2,
+    fallback: 4.194304,
   },
-  round: 'ceil',
 };
 
-const qwenImageEditCreditEstimator = fixedCredits(4, 'Estimated from public Kie pricing; assumes a 1MP output');
+const qwenImageEditCreditEstimator = fixedCredits(4);
+const qwenImageEditMegapixelCreditEstimator = undefined; // Kie charges 5 credits/MP; source/output dimensions are not measured here.
 
 const qwenImage3CreditEstimator = fixedCredits(4.8);
 
@@ -1142,16 +1141,15 @@ const gptImage15CreditEstimator: AIModel['creditEstimator'] = {
     values: { medium: 4, high: 22 },
     fallback: 4,
   },
-  round: 'ceil',
 };
 
-const qwenImage2CreditEstimator = fixedCredits(6, 'Estimated from public Kie pricing; final price varies by aspect ratio');
+const qwenImage2CreditEstimator = fixedCredits(5.6);
 
 const grokImagineImageCreditEstimator = fixedCredits(4);
 
-const topazImageCreditEstimator = fixedCredits(10, 'Estimated from public Kie pricing; assumes a source image up to 2K');
+const topazImageCreditEstimator = undefined; // Output dimensions are needed to distinguish 2K (10 credits) from 4K (20 credits).
 
-const grokVideoUpscaleCreditEstimator = fixedCredits(10, 'Estimated from public Kie pricing; 480P to 720P output');
+const grokVideoUpscaleCreditEstimator: AIModel['creditEstimator'] = {creditsByParam:{key:'resolution',values:{'720p':10}},label:'Kie public pricing; 1080p requires the source resolution to distinguish 20 vs 30 credits'};
 
 const grokImagineImage2CreditEstimator = fixedCredits(4);
 
@@ -1171,7 +1169,6 @@ const qwenImage3ProCreditEstimator: AIModel['creditEstimator'] = {
     key: 'image_urls',
     unitCredits: 0.5,
   },
-  round: 'ceil',
 };
 
 const kling30CreditEstimator: AIModel['creditEstimator'] = {
@@ -1187,7 +1184,6 @@ const kling30CreditEstimator: AIModel['creditEstimator'] = {
       '4K|true': 67,
     },
   },
-  round: 'ceil',
 };
 
 const kling30TurboCreditEstimator: AIModel['creditEstimator'] = {
@@ -1200,7 +1196,6 @@ const kling30TurboCreditEstimator: AIModel['creditEstimator'] = {
     },
     fallback: 18,
   },
-  round: 'ceil',
 };
 
 const kling26CreditEstimator: AIModel['creditEstimator'] = {
@@ -1219,40 +1214,25 @@ const kling26CreditEstimator: AIModel['creditEstimator'] = {
       false: 1,
     },
   },
-  round: 'ceil',
 };
 
 const veo31CreditEstimator: AIModel['creditEstimator'] = {
-  label: 'Estimated from public Kie pricing',
-  creditsByParam: {
-    key: 'model',
-    values: {
-      veo3_lite: 60,
-      veo3_fast: 60,
-      veo3: 250,
-    },
-    fallback: 60,
-  },
-  round: 'ceil',
+  label: 'Kie public pricing including HD upgrade, verified 2026-10-24',
+  creditsByParamCombo: {keys:['model','resolution'],values:{
+    'veo3_lite|720p':30, 'veo3_lite|1080p':35, 'veo3_lite|4k':150,
+    'veo3_fast|720p':60, 'veo3_fast|1080p':65, 'veo3_fast|4k':180,
+    'veo3|720p':250, 'veo3|1080p':255, 'veo3|4k':370,
+  }},
 };
 
 const veo31ExtendCreditEstimator: AIModel['creditEstimator'] = {
-  label: 'Estimated from public Kie pricing',
-  creditsByParam: {
-    key: 'model',
-    values: {
-      veo3_lite: 60,
-      veo3_fast: 60,
-      veo3: 250,
-    },
-    fallback: 60,
-  },
-  round: 'ceil',
+  label: 'Kie public pricing, verified 2026-10-24',
+  creditsByParam: {key:'model',values:{veo3_lite:30,veo3_fast:60,veo3:250}},
 };
 
-const geminiOmniCreditEstimator: AIModel['creditEstimator'] = fixedCredits(80, 'Estimated from Kie playground');
+const geminiOmniCreditEstimator = geminiOmniFlash11CreditEstimator;
 
-const geminiOmniIdCreditEstimator: AIModel['creditEstimator'] = fixedCredits(5, 'Estimated from Kie playground');
+const geminiOmniIdCreditEstimator = undefined; // No current public price for Character ID / Audio ID creation.
 
 const grokTextToImageParams: ModelParamConfig[] = [
   { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: [{ label: '2:3', value: '2:3' }, { label: '3:2', value: '3:2' }, { label: '1:1', value: '1:1' }, { label: '9:16', value: '9:16' }, { label: '16:9', value: '16:9' }], defaultValue: '3:2' }
@@ -1288,12 +1268,13 @@ const ideogramEditParams: ModelParamConfig[] = [
 
 const gptImage15Params: ModelParamConfig[] = [
   { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: [{ label: '1:1', value: '1:1' }, { label: '3:2', value: '3:2' }, { label: '2:3', value: '2:3' }, { label: '16:9', value: '16:9' }, { label: '9:16', value: '9:16' }], defaultValue: '1:1' },
-  { name: 'Quality', key: 'quality', type: 'select', options: [{ label: 'Low', value: 'low' }, { label: 'Medium', value: 'medium' }, { label: 'High', value: 'high' }], defaultValue: 'medium' }
+  { name: 'Quality', key: 'quality', type: 'select', options: [{ label: 'Medium', value: 'medium' }, { label: 'High', value: 'high' }], defaultValue: 'medium' }
 ];
 
 const gptImage2Params: ModelParamConfig[] = [
-  { name: 'Aspect Ratio', key: 'aspect_ratio', type: 'select', options: [{ label: 'Auto', value: 'auto' }, { label: '1:1', value: '1:1' }, { label: '16:9', value: '16:9' }, { label: '9:16', value: '9:16' }, { label: '4:3', value: '4:3' }, { label: '3:4', value: '3:4' }], defaultValue: 'auto' },
-  { name: 'Resolution', key: 'resolution', type: 'select', options: [{ label: '1K', value: '1K' }, { label: '2K', value: '2K' }, { label: '4K', value: '4K' }], defaultValue: '1K' }
+  {name:'Aspect Ratio',key:'aspect_ratio',type:'select',options:['auto','1:1','2:3','3:2','16:9','9:16','4:3','3:4','4:5','5:4','21:9','9:21','1:2','2:1','1:3','3:1'].map(value=>({label:value,value})),defaultValue:'auto'},
+  {name:'Resolution',key:'resolution',type:'select',options:['1K','2K','4K'].map(value=>({label:value,value})),defaultValue:'1K'},
+  {name:'Background',key:'background',type:'select',options:['auto','opaque','transparent'].map(value=>({label:value,value})),defaultValue:'auto'},
 ];
 
 const qwenImageToImageParams: ModelParamConfig[] = [
@@ -1363,8 +1344,8 @@ const elevenTtsParams: ModelParamConfig[] = [
 ];
 
 export const SUPPORTED_MODELS: AIModel[] = [
-  { id: 'google/gemini-3-8-flash-tts', name: 'Gemini 3.8 Flash TTS', provider: 'Google', category: 'text-to-audio', familyId: 'google-gemini-tts', familyName: 'Gemini TTS', modeName: 'Text to Speech', params: geminiTtsParams },
-  { id: 'elevenlabs/text-to-speech-turbo-2-5', name: 'ElevenLabs Turbo 2.5', provider: 'ElevenLabs', category: 'text-to-audio', familyId: 'elevenlabs-tts', familyName: 'ElevenLabs TTS', modeName: 'Text to Speech', params: elevenTtsParams },
+  { id: 'google/gemini-3-8-flash-tts', name: 'Gemini 3.8 Flash TTS', provider: 'Google', category: 'text-to-audio', familyId: 'google-gemini-tts', familyName: 'Gemini TTS', modeName: 'Text to Speech', params: geminiTtsParams, description:'Public price: 70 credits / 1M input tokens + 1260 credits / 1M audio output tokens. Final cost depends on generated audio.' },
+  { id: 'elevenlabs/text-to-speech-turbo-2-5', name: 'ElevenLabs Turbo 2.5', provider: 'ElevenLabs', category: 'text-to-audio', familyId: 'elevenlabs-tts', familyName: 'ElevenLabs TTS', modeName: 'Text to Speech', params: elevenTtsParams, description:'Public price: 6 credits / 1000 characters.', creditEstimator:{creditsPerThousandCharacters:6,label:'Kie public pricing: 6 credits / 1000 characters, verified 2026-10-24'} },
   // Image Models
   { id: 'wan/2-7-image', name: 'Wan 2.7 Image', provider: 'Wan', category: 'text-to-image', params: wanImageParams, creditEstimator: wan27ImageCreditEstimator },
   { id: 'bytedance/seedream', name: 'Seedream 3.0', provider: 'Bytedance', category: 'text-to-image', params: seedream3TextToImageParams, creditEstimator: seedream3CreditEstimator },
@@ -1372,11 +1353,11 @@ export const SUPPORTED_MODELS: AIModel[] = [
   { id: 'seedream/4.5-text-to-image', name: 'Seedream 4.5', provider: 'Bytedance', category: 'text-to-image', params: seedream45TextToImageParams, creditEstimator: seedream45CreditEstimator },
   { id: 'seedream/5-lite-text-to-image', name: 'Seedream 5.0 Lite', provider: 'Bytedance', category: 'text-to-image', params: seedream45TextToImageParams, creditEstimator: seedream5LiteCreditEstimator },
   { id: 'seedream/5-pro-text-to-image', name: 'Seedream 5.0 Pro', provider: 'Bytedance', category: 'text-to-image', params: seedream5ProParams, creditEstimator: seedream5ProCreditEstimator },
-  { id: 'google/imagen4-fast', name: 'Imagen 4 Fast', provider: 'Google', category: 'text-to-image', params: googleImagenParams },
-  { id: 'google/imagen4', name: 'Imagen 4', provider: 'Google', category: 'text-to-image', params: googleImagenParams },
+  { id: 'google/imagen4-fast', name: 'Imagen 4 Fast', provider: 'Google', category: 'text-to-image', params: googleImagenParams, creditEstimator: fixedCredits(4) },
+  { id: 'google/imagen4', name: 'Imagen 4', provider: 'Google', category: 'text-to-image', params: googleImagenParams, creditEstimator: fixedCredits(8) },
   { id: 'google/imagen4-ultra', name: 'Imagen 4 Ultra', provider: 'Google', category: 'text-to-image', params: googleImagenParams, creditEstimator: fixedCredits(12, 'Estimated from public Kie pricing', 'num_images') },
   { id: 'qwen/text-to-image', name: 'Qwen Image', provider: 'Alibaba', category: 'text-to-image', params: qwenTextToImageParams, creditEstimator: qwenImageCreditEstimator },
-  { id: 'grok-imagine/text-to-image', name: 'Grok Images', provider: 'xAI', category: 'text-to-image', params: grokTextToImageParams },
+  { id: 'grok-imagine/text-to-image', name: 'Grok Images', provider: 'xAI', category: 'text-to-image', params: [...grokTextToImageParams,{name:'Quality mode',key:'enable_pro',type:'boolean',defaultValue:false}], creditEstimator:{creditsByParam:{key:'enable_pro',values:{true:5,false:4},fallback:4}} },
   { id: 'grok-imagine-image-2-0', name: 'Grok Imagine Image 2.0', provider: 'xAI', category: 'text-to-image', params: grokTextToImageParams, creditEstimator: grokImagineImage2CreditEstimator },
   { id: 'qwen3/text-to-image', name: 'Qwen Image 3.0', provider: 'Alibaba', category: 'text-to-image', params: qwenImage3Params, creditEstimator: qwenImage3CreditEstimator },
   { id: 'google/nano-banana', name: 'Nano Banana', provider: 'Google', category: 'text-to-image', params: nanoBananaClassicParams, creditEstimator: nanoBananaClassicCreditEstimator },
@@ -1385,7 +1366,7 @@ export const SUPPORTED_MODELS: AIModel[] = [
   { id: 'nano-banana-pro', name: 'Nano Banana Pro', provider: 'Google', category: 'text-to-image', familyId: 'google-nano-banana-pro', familyName: 'Nano Banana Pro', modeName: 'Text to Image', params: nanoBananaParams, creditEstimator: nanoBananaProCreditEstimator },
   { id: 'z-image', name: 'Z-Image', provider: 'Z-Image', category: 'text-to-image', params: zImageParams, creditEstimator: zImageCreditEstimator },
   { id: 'flux-2/pro-text-to-image', name: 'Flux 2 Pro', provider: 'Flux', category: 'text-to-image', params: fluxImageToImageParams, creditEstimator: flux2CreditEstimator },
-  { id: 'flux-2/flex-text-to-image', name: 'Flux 2 Flex', provider: 'Flux', category: 'text-to-image', params: fluxImageToImageParams, creditEstimator: flux2CreditEstimator },
+  { id: 'flux-2/flex-text-to-image', name: 'Flux 2 Flex', provider: 'Flux', category: 'text-to-image', params: fluxImageToImageParams, creditEstimator: flux2FlexCreditEstimator },
   { id: 'gpt-image/1.5-text-to-image', name: 'GPT Image 1.5', provider: 'OpenAI', category: 'text-to-image', params: gptImage15Params, creditEstimator: gptImage15CreditEstimator },
   { id: 'gpt-image-2-text-to-image', name: 'GPT Image 2', provider: 'OpenAI', category: 'text-to-image', params: gptImage2Params, creditEstimator: gptImage2CreditEstimator },
   { id: 'ideogram/v3-text-to-image', name: 'Ideogram V3', provider: 'Ideogram', category: 'text-to-image', params: ideogramParams, creditEstimator: ideogramV3CreditEstimator },
@@ -1393,18 +1374,18 @@ export const SUPPORTED_MODELS: AIModel[] = [
   { id: 'wan/2-7-image-pro', name: 'Wan 2.7 Image Pro', provider: 'Wan', category: 'text-to-image', params: wanImageParams, creditEstimator: wan27ImageProCreditEstimator },
 
   // Image Models (Image to Image)
-  { id: 'seedream/5-pro-image-to-image', name: 'Seedream 5.0 Pro I2I', provider: 'Bytedance', category: 'image-to-image', params: seedream5ProImageParams, creditEstimator: seedream5ProCreditEstimator },
+  { id: 'seedream/5-pro-image-to-image', name: 'Seedream 5.0 Pro I2I', provider: 'Bytedance', category: 'image-to-image', params: seedream5ProImageParams, creditEstimator: {...seedream5ProCreditEstimator,additionalCreditsByQuantity:{key:'image_urls',unitCredits:0.5,freeQuantity:1}} },
   { id: 'seedream/5-lite-image-to-image', name: 'Seedream 5.0 Lite I2I', provider: 'Bytedance', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: seedream45EditParams, creditEstimator: seedream5LiteCreditEstimator },
   { id: 'google/nano-banana-edit', name: 'Nano Banana Edit', provider: 'Google', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: nanoBananaClassicParams, creditEstimator: nanoBananaClassicCreditEstimator },
   { id: 'nano-banana-pro', name: 'Nano Banana Pro I2I', provider: 'Google', category: 'image-to-image', familyId: 'google-nano-banana-pro', familyName: 'Nano Banana Pro', modeName: 'Image to Image', supportsImageUpload: true, imageInputKey: 'image_input', imageInputMode: 'array', params: nanoBananaParams, creditEstimator: nanoBananaProCreditEstimator },
   { id: 'flux-2/pro-image-to-image', name: 'Flux 2 Pro I2I', provider: 'Flux', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'input_urls', imageInputMode: 'array', params: fluxImageToImageParams, creditEstimator: flux2CreditEstimator },
-  { id: 'flux-2/flex-image-to-image', name: 'Flux 2 Flex I2I', provider: 'Flux', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'input_urls', imageInputMode: 'array', params: fluxImageToImageParams, creditEstimator: flux2CreditEstimator },
+  { id: 'flux-2/flex-image-to-image', name: 'Flux 2 Flex I2I', provider: 'Flux', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'input_urls', imageInputMode: 'array', params: fluxImageToImageParams, creditEstimator: flux2FlexCreditEstimator },
   { id: 'grok-imagine/image-to-image', name: 'Grok Imagine I2I', provider: 'xAI', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: [], creditEstimator: grokImagineImageCreditEstimator },
   { id: 'grok-imagine-image-2-0', name: 'Grok Imagine Image 2.0 I2I', provider: 'xAI', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: grokTextToImageParams, creditEstimator: grokImagineImage2CreditEstimator },
   { id: 'gpt-image/1.5-image-to-image', name: 'GPT Image 1.5 I2I', provider: 'OpenAI', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'input_urls', imageInputMode: 'array', params: gptImage15Params, creditEstimator: gptImage15CreditEstimator },
   { id: 'gpt-image-2-image-to-image', name: 'GPT Image 2 I2I', provider: 'OpenAI', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'input_urls', imageInputMode: 'array', params: gptImage2Params, creditEstimator: gptImage2CreditEstimator },
   { id: 'qwen/image-to-image', name: 'Qwen I2I', provider: 'Alibaba', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'image_url', imageInputMode: 'single', params: qwenImageToImageParams, creditEstimator: qwenImageEditCreditEstimator },
-  { id: 'qwen3/image-to-image', name: 'Qwen Image 3.0 I2I', provider: 'Alibaba', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: qwenImage3ImageParams, creditEstimator: qwenImage3CreditEstimator },
+  { id: 'qwen3/image-to-image', name: 'Qwen Image 3.0 I2I', provider: 'Alibaba', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: qwenImage3ImageParams, creditEstimator: {...qwenImage3CreditEstimator,additionalCreditsByQuantity:{key:'image_urls',unitCredits:0.5}} },
   { id: 'qwen3/pro-image-to-image', name: 'Qwen Image 3.0 Pro I2I', provider: 'Alibaba', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: qwenImage3ImageParams, creditEstimator: qwenImage3ProCreditEstimator },
   { id: 'nano-banana-2-lite', name: 'Nano Banana 2 Lite I2I', provider: 'Google', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'image_input', imageInputMode: 'array', params: [], creditEstimator: nanoBanana2LiteCreditEstimator },
   { id: 'ideogram/v3-remix', name: 'Ideogram V3 Remix', provider: 'Ideogram', category: 'image-to-image', supportsImageUpload: true, imageInputKey: 'image_url', imageInputMode: 'single', params: ideogramEditParams, creditEstimator: ideogramV3CreditEstimator },
@@ -1412,14 +1393,14 @@ export const SUPPORTED_MODELS: AIModel[] = [
   // Image Models (Image Edit)
   { id: 'bytedance/seedream-v4-edit', name: 'Seedream 4.0 Edit', provider: 'Bytedance', category: 'image-edit', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: seedream4EditParams, creditEstimator: seedream4CreditEstimator },
   { id: 'seedream/4.5-edit', name: 'Seedream 4.5 Edit', provider: 'Bytedance', category: 'image-edit', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: seedream45EditParams, creditEstimator: seedream45CreditEstimator },
-  { id: 'qwen/image-edit', name: 'Qwen Edit', provider: 'Alibaba', category: 'image-edit', supportsImageUpload: true, imageInputKey: 'image_url', imageInputMode: 'single', params: qwenImageEditParams, creditEstimator: qwenImageEditCreditEstimator },
+  { id: 'qwen/image-edit', name: 'Qwen Edit', provider: 'Alibaba', category: 'image-edit', supportsImageUpload: true, imageInputKey: 'image_url', imageInputMode: 'single', params: qwenImageEditParams, creditEstimator: qwenImageEditMegapixelCreditEstimator },
   { id: 'qwen2/image-edit', name: 'Qwen2 Edit', provider: 'Alibaba', category: 'image-edit', supportsImageUpload: true, imageInputKey: 'image_url', imageInputMode: 'single', params: qwen2ImageEditParams, creditEstimator: qwenImage2CreditEstimator },
   { id: 'topaz/image-upscale', name: 'Topaz Image Upscale', provider: 'Topaz', category: 'image-edit', supportsImageUpload: true, imageInputKey: 'image_url', imageInputMode: 'single', params: topazImageUpscaleParams, creditEstimator: topazImageCreditEstimator },
-  { id: 'recraft/remove-background', name: 'Recraft Remove BG', provider: 'Recraft', category: 'image-edit', supportsImageUpload: true, imageInputKey: 'image', imageInputMode: 'single', params: [] },
-  { id: 'recraft/crisp-upscale', name: 'Recraft Crisp Upscale', provider: 'Recraft', category: 'image-edit', supportsImageUpload: true, imageInputKey: 'image', imageInputMode: 'single', params: [] },
+  { id: 'recraft/remove-background', name: 'Recraft Remove BG', provider: 'Recraft', category: 'image-edit', supportsImageUpload: true, imageInputKey: 'image', imageInputMode: 'single', params: [], creditEstimator: fixedCredits(1) },
+  { id: 'recraft/crisp-upscale', name: 'Recraft Crisp Upscale', provider: 'Recraft', category: 'image-edit', supportsImageUpload: true, imageInputKey: 'image', imageInputMode: 'single', params: [], creditEstimator: fixedCredits(0.5) },
   { id: 'ideogram/v3-edit', name: 'Ideogram V3 Edit', provider: 'Ideogram', category: 'image-edit', supportsImageUpload: true, imageInputKey: 'image_url', imageInputMode: 'single', params: ideogramEditParams, creditEstimator: ideogramV3CreditEstimator },
-  { id: 'ideogram/character-edit', name: 'Ideogram Character Edit', provider: 'Ideogram', category: 'image-edit', supportsImageUpload: true, imageInputKey: 'image_url', imageInputMode: 'single', params: ideogramEditParams, creditEstimator: ideogramV3CreditEstimator },
-  { id: 'ideogram/character-remix', name: 'Ideogram Character Remix', provider: 'Ideogram', category: 'image-edit', supportsImageUpload: true, imageInputKey: 'image_url', imageInputMode: 'single', params: ideogramEditParams, creditEstimator: ideogramV3CreditEstimator },
+  { id: 'ideogram/character-edit', name: 'Ideogram Character Edit', provider: 'Ideogram', category: 'image-edit', supportsImageUpload: true, imageInputKey: 'image_url', imageInputMode: 'single', params: ideogramEditParams, creditEstimator: ideogramCharacterCreditEstimator },
+  { id: 'ideogram/character-remix', name: 'Ideogram Character Remix', provider: 'Ideogram', category: 'image-edit', supportsImageUpload: true, imageInputKey: 'image_url', imageInputMode: 'single', params: ideogramEditParams, creditEstimator: ideogramCharacterCreditEstimator },
   
   // Video Models (Text to Video)
   { id: 'grok-imagine/text-to-video', name: 'Grok Imagine T2V', provider: 'xAI', category: 'text-to-video', params: grokImageToVideoParams, creditEstimator: grokVideoCreditEstimator },
@@ -1440,17 +1421,18 @@ export const SUPPORTED_MODELS: AIModel[] = [
   { id: 'bytedance/seedance-2-5', name: 'Seedance 2.5', provider: 'Bytedance', category: 'text-to-video', familyId: 'bytedance-seedance-2-5', familyName: 'Seedance 2.5', modeName: 'Text to Video', supportsImageUpload: true, supportsVideoUpload: true, imageInputKey: 'first_frame_url', imageInputMode: 'single', videoInputKey: 'reference_video_urls', videoInputMode: 'array', params: seedance25Params, creditEstimator: seedance25CreditEstimator },
   { id: 'pixverse-v6/text-to-video', name: 'PixVerse V6', provider: 'PixVerse', category: 'text-to-video', familyId: 'pixverse-v6', familyName: 'PixVerse V6', modeName: 'Text to Video', params: pixverseTextParams, creditEstimator: pixverseCreditEstimator },
   { id: 'minimax-h3/text-to-video', name: 'MiniMax H3', provider: 'MiniMax', category: 'text-to-video', familyId: 'minimax-h3', familyName: 'MiniMax H3', modeName: 'Text to Video', params: minimaxH3TextParams, creditEstimator: minimaxH3CreditEstimator },
+  { id: 'kling-4.0/keyframe-to-video', name: 'Kling 4.0', provider: 'Kuaishou', category: 'text-to-video', familyId: 'kling-4', familyName: 'Kling 4.0', modeName: 'Text to Video', params: kling40Params, creditEstimator: kling40CreditEstimator },
   { id: 'kling/v3-turbo-text-to-video', name: 'Kling 3.0 Turbo', provider: 'Kuaishou', category: 'text-to-video', familyId: 'kling-3-turbo', familyName: 'Kling 3.0 Turbo', modeName: 'Text to Video', params: kling30TurboTextParams, creditEstimator: kling30TurboCreditEstimator },
   { id: 'kling-3.0-omni/text-to-video', name: 'Kling O3', provider: 'Kuaishou', category: 'text-to-video', familyId: 'kling-o3', familyName: 'Kling O3', modeName: 'Text to Video', params: klingO3Params, creditEstimator: klingO3CreditEstimator },
   { id: 'kling-3.0/video', name: 'Kling 3.0', provider: 'Kuaishou', category: 'text-to-video', familyId: 'kling-3', familyName: 'Kling 3.0', modeName: 'Text to Video', params: kling30Params, creditEstimator: kling30CreditEstimator },
   { id: 'kling/2-6-text-to-video', name: 'Kling 2.6', provider: 'Kuaishou', category: 'text-to-video', params: kling26Params, creditEstimator: kling26CreditEstimator },
-  { id: 'kling/2-5-turbo-text-to-video-pro', name: 'Kling 2.5 Turbo Pro', provider: 'Kuaishou', category: 'text-to-video', params: kling25Params, creditEstimator: kling25CreditEstimator },
-  { id: 'kling/2-1-master-text-to-video', name: 'Kling 2.1 Master', provider: 'Kuaishou', category: 'text-to-video', params: kling21Params, creditEstimator: kling21MasterCreditEstimator },
+  { id: 'kling/2-5-turbo-text-to-video-pro', name: 'Kling 2.5 Turbo Pro', provider: 'Kuaishou', category: 'text-to-video', params: kling25Params.filter(p=>p.key!=='mode'), creditEstimator: kling25CreditEstimator },
+  { id: 'kling/2-1-master-text-to-video', name: 'Kling 2.1 Master', provider: 'Kuaishou', category: 'text-to-video', params: kling21Params.filter(p=>p.key!=='mode'), creditEstimator: kling21MasterCreditEstimator },
   { id: 'kling/2-1-pro', name: 'Kling 2.1 Pro', provider: 'Kuaishou', category: 'text-to-video', params: kling21Params, creditEstimator: kling21ProCreditEstimator },
   { id: 'kling/2-1-standard', name: 'Kling 2.1 Standard', provider: 'Kuaishou', category: 'text-to-video', params: kling21Params, creditEstimator: kling21StandardCreditEstimator },
-  { id: 'hailuo/02-text-to-video-pro', name: 'Hailuo Pro', provider: 'MiniMax', category: 'text-to-video', params: hailuoTextParams, creditEstimator: hailuo02ProCreditEstimator },
+  { id: 'hailuo/02-text-to-video-pro', name: 'Hailuo Pro', provider: 'MiniMax', category: 'text-to-video', params: hailuoTextParams.map(p=>p.key==='duration'?{...p,options:[{label:'6s',value:'6'}],defaultValue:'6'}:p), creditEstimator: hailuo02ProCreditEstimator },
   { id: 'hailuo/02-text-to-video-standard', name: 'Hailuo Standard', provider: 'MiniMax', category: 'text-to-video', params: hailuoTextParams, creditEstimator: hailuo02StandardCreditEstimator },
-  { id: 'happyhorse/text-to-video', name: 'HappyHorse', provider: 'HappyHorse', category: 'text-to-video', params: happyHorseVideoParams, creditEstimator: happyHorse11CreditEstimator },
+  { id: 'happyhorse/text-to-video', name: 'HappyHorse', provider: 'HappyHorse', category: 'text-to-video', params: happyHorseVideoParams, creditEstimator: happyHorse10CreditEstimator },
   { id: 'gemini-omni-video', name: 'Gemini Omni Video', provider: 'Google', category: 'text-to-video', familyId: 'google-gemini-omni', familyName: 'Google Omni', modeName: 'Text to Video', supportsImageUpload: true, supportsVideoUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: geminiOmniVideoParams, creditEstimator: geminiOmniCreditEstimator },
   { id: 'google/gemini-omni-flash-1-1', name: 'Gemini Omni 1.1 Flash', provider: 'Google', category: 'text-to-video', familyId: 'google-gemini-omni-flash-1-1', familyName: 'Gemini Omni 1.1 Flash', modeName: 'Text to Video', supportsImageUpload: true, supportsVideoUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: geminiOmniFlash11Params, creditEstimator: geminiOmniFlash11CreditEstimator },
   { id: 'gemini-omni-character', name: 'Gemini Omni Character', provider: 'Google', category: 'text-to-text', familyId: 'google-gemini-omni', familyName: 'Google Omni', modeName: 'Character ID', allowsPromptlessGeneration: true, params: geminiOmniCharacterParams, creditEstimator: geminiOmniIdCreditEstimator },
@@ -1475,11 +1457,10 @@ export const SUPPORTED_MODELS: AIModel[] = [
     creditEstimator: {
       label: 'Estimated from Kie playground',
       creditsPerSecondByResolution: {
-        '480p': 14.75,
-        '720p': 27.65,
+        '480p': 2.4,
+        '720p': 4.5,
       },
-      round: 'ceil',
-    },
+        },
   },
   { id: 'grok-imagine/image-to-video', name: 'Grok Imagine I2V', provider: 'xAI', category: 'image-to-video', supportsImageUpload: true, params: grokImageToVideoParams, creditEstimator: grokVideoCreditEstimator },
   { id: 'happyhorse-1-1/reference-to-video', name: 'HappyHorse 1.1 Reference', provider: 'Alibaba', category: 'image-to-video', familyId: 'happyhorse-1-1', familyName: 'HappyHorse 1.1', modeName: 'Reference to Video', supportsImageUpload: true, requiresImageInput: true, imageInputKey: 'reference_image', imageInputMode: 'array', params: happyHorse11Params, creditEstimator: happyHorse11CreditEstimator },
@@ -1495,34 +1476,36 @@ export const SUPPORTED_MODELS: AIModel[] = [
   { id: 'minimax-h3/image-to-video', name: 'MiniMax H3 I2V', provider: 'MiniMax', category: 'image-to-video', familyId: 'minimax-h3', familyName: 'MiniMax H3', modeName: 'Image to Video', supportsImageUpload: true, imageInputKey: 'first_frame_url', imageInputMode: 'single', params: minimaxH3ImageParams, creditEstimator: minimaxH3CreditEstimator },
   { id: 'minimax-h3/reference-to-video', name: 'MiniMax H3 Reference', provider: 'MiniMax', category: 'image-to-video', familyId: 'minimax-h3', familyName: 'MiniMax H3', modeName: 'Reference to Video', supportsImageUpload: true, supportsVideoUpload: true, imageInputKey: 'reference_image_urls', imageInputMode: 'array', videoInputKey: 'reference_video_urls', videoInputMode: 'array', params: minimaxH3ReferenceParams, creditEstimator: minimaxH3ReferenceCreditEstimator },
   { id: 'veo-3.1', name: 'Veo 3.1 I2V', provider: 'Google', category: 'image-to-video', familyId: 'google-veo-3-1', familyName: 'Veo 3.1', modeName: 'Image to Video', supportsImageUpload: true, params: veo31Params, creditEstimator: veo31CreditEstimator },
+  { id: 'kling-4.0/keyframe-to-video', name: 'Kling 4.0 Keyframes', provider: 'Kuaishou', category: 'image-to-video', familyId: 'kling-4', familyName: 'Kling 4.0', modeName: 'Keyframes', supportsImageUpload: true, imageInputKey: 'first_frame_url', imageInputMode: 'single', params: kling40KeyframeParams, creditEstimator: kling40CreditEstimator },
+  { id: 'kling-4.0/reference-to-video', name: 'Kling 4.0 Reference', provider: 'Kuaishou', category: 'image-to-video', familyId: 'kling-4', familyName: 'Kling 4.0', modeName: 'Reference', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', supportsVideoUpload: true, videoInputKey: 'video_urls', videoInputMode: 'array', params: kling40ReferenceParams, creditEstimator: kling40CreditEstimator },
   { id: 'kling/v3-turbo-image-to-video', name: 'Kling 3.0 Turbo I2V', provider: 'Kuaishou', category: 'image-to-video', familyId: 'kling-3-turbo', familyName: 'Kling 3.0 Turbo', modeName: 'Image to Video', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: kling30TurboImageParams, creditEstimator: kling30TurboCreditEstimator },
   { id: 'kling-3.0-omni/image-to-video', name: 'Kling O3 I2V', provider: 'Kuaishou', category: 'image-to-video', familyId: 'kling-o3', familyName: 'Kling O3', modeName: 'Image to Video', supportsImageUpload: true, requiresImageInput: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: klingO3Params, creditEstimator: klingO3CreditEstimator },
   { id: 'kling-3.0/video', name: 'Kling 3.0 I2V', provider: 'Kuaishou', category: 'image-to-video', familyId: 'kling-3', familyName: 'Kling 3.0', modeName: 'Image to Video', supportsImageUpload: true, params: kling30Params, creditEstimator: kling30CreditEstimator },
   { id: 'kling/2-6-image-to-video', name: 'Kling 2.6 I2V', provider: 'Kuaishou', category: 'image-to-video', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: kling26Params, creditEstimator: kling26CreditEstimator },
-  { id: 'kling/2-5-turbo-image-to-video-pro', name: 'Kling 2.5 Turbo Pro I2V', provider: 'Kuaishou', category: 'image-to-video', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: kling25Params, creditEstimator: kling25CreditEstimator },
-  { id: 'kling/2-1-master-image-to-video', name: 'Kling 2.1 Master I2V', provider: 'Kuaishou', category: 'image-to-video', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: kling21Params, creditEstimator: kling21MasterCreditEstimator },
+  { id: 'kling/2-5-turbo-image-to-video-pro', name: 'Kling 2.5 Turbo Pro I2V', provider: 'Kuaishou', category: 'image-to-video', supportsImageUpload: true, imageInputKey: 'image_url', imageInputMode: 'single', params: kling25Params.filter(p=>p.key!=='mode' && p.key!=='aspect_ratio'), creditEstimator: kling25CreditEstimator },
+  { id: 'kling/2-1-master-image-to-video', name: 'Kling 2.1 Master I2V', provider: 'Kuaishou', category: 'image-to-video', supportsImageUpload: true, imageInputKey: 'image_url', imageInputMode: 'single', params: kling21Params.filter(p=>p.key!=='mode'), creditEstimator: kling21MasterCreditEstimator },
   { id: 'hailuo/02-image-to-video-pro', name: 'Hailuo Pro I2V', provider: 'MiniMax', category: 'image-to-video', supportsImageUpload: true, imageInputKey: 'image_url', imageInputMode: 'single', params: hailuo02ProImageParams, creditEstimator: hailuo02ProCreditEstimator },
   { id: 'hailuo/02-image-to-video-standard', name: 'Hailuo Standard I2V', provider: 'MiniMax', category: 'image-to-video', supportsImageUpload: true, imageInputKey: 'image_url', imageInputMode: 'single', params: hailuo02StandardImageParams, creditEstimator: hailuo02StandardImageCreditEstimator },
   { id: 'hailuo/2-3-pro-image-to-video', name: 'Hailuo 2.3 Pro I2V', provider: 'MiniMax', category: 'image-to-video', supportsImageUpload: true, imageInputKey: 'image_url', imageInputMode: 'single', params: hailuo23Params, creditEstimator: hailuo23ProCreditEstimator },
   { id: 'hailuo/2-3-standard-image-to-video', name: 'Hailuo 2.3 Standard I2V', provider: 'MiniMax', category: 'image-to-video', supportsImageUpload: true, imageInputKey: 'image_url', imageInputMode: 'single', params: hailuo23Params, creditEstimator: hailuo23StandardCreditEstimator },
-  { id: 'happyhorse/image-to-video', name: 'HappyHorse I2V', provider: 'HappyHorse', category: 'image-to-video', supportsImageUpload: true, params: happyHorseImageToVideoParams, creditEstimator: happyHorse11CreditEstimator },
-  { id: 'happyhorse/reference-to-video', name: 'HappyHorse Reference Video', provider: 'HappyHorse', category: 'image-to-video', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: happyHorseImageToVideoParams, creditEstimator: happyHorse11CreditEstimator },
+  { id: 'happyhorse/image-to-video', name: 'HappyHorse I2V', provider: 'HappyHorse', category: 'image-to-video', supportsImageUpload: true, params: happyHorseImageToVideoParams, creditEstimator: happyHorse10CreditEstimator },
+  { id: 'happyhorse/reference-to-video', name: 'HappyHorse Reference Video', provider: 'HappyHorse', category: 'image-to-video', supportsImageUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: happyHorseImageToVideoParams, creditEstimator: happyHorse10CreditEstimator },
   { id: 'gemini-omni-video', name: 'Gemini Omni I2V', provider: 'Google', category: 'image-to-video', familyId: 'google-gemini-omni', familyName: 'Google Omni', modeName: 'Image to Video', supportsImageUpload: true, supportsVideoUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: geminiOmniVideoParams, creditEstimator: geminiOmniCreditEstimator },
   { id: 'google/gemini-omni-flash-1-1', name: 'Gemini Omni 1.1 Flash I2V', provider: 'Google', category: 'image-to-video', familyId: 'google-gemini-omni-flash-1-1', familyName: 'Gemini Omni 1.1 Flash', modeName: 'Image to Video', supportsImageUpload: true, supportsVideoUpload: true, requiresImageInput: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: geminiOmniFlash11Params, creditEstimator: geminiOmniFlash11CreditEstimator },
   { id: 'omnihuman-1-5', name: 'OmniHuman 1.5', provider: 'Bytedance', category: 'image-to-video', supportsImageUpload: true, requiresImageInput: true, imageInputKey: 'image_url', imageInputMode: 'single', params: omniHuman15Params },
 
   // Video Models (Video to Video)
   { id: 'wan/2-6-video-to-video', name: 'Wan 2.6 V2V', provider: 'Wan', category: 'video-to-video', supportsVideoUpload: true, params: wanVideoToVideoParams, creditEstimator: wan26CreditEstimator },
-  { id: 'wan/2-6-flash-video-to-video', name: 'Wan 2.6 Flash V2V', provider: 'Wan', category: 'video-to-video', supportsVideoUpload: true, videoInputKey: 'video_urls', videoInputMode: 'array', params: wanVideoToVideoParams },
+  { id: 'wan/2-6-flash-video-to-video', name: 'Wan 2.6 Flash V2V', provider: 'Wan', category: 'video-to-video', supportsVideoUpload: true, videoInputKey: 'video_urls', videoInputMode: 'array', params: [...wanVideoToVideoParams,{name:'Generate Audio',key:'audio',type:'boolean',defaultValue:true}], creditEstimator: wan26FlashCreditEstimator },
   { id: 'wan/2-7-video-edit', name: 'Wan 2.7 Video Edit', provider: 'Wan', category: 'video-to-video', supportsVideoUpload: true, videoInputKey: 'video_urls', videoInputMode: 'array', params: wanVideoToVideoParams, creditEstimator: wan27VideoCreditEstimator },
   { id: 'wan/3-0-video', name: 'Wan 3.0 Video V2V', provider: 'Wan', category: 'video-to-video', familyId: 'wan-3', familyName: 'Wan 3.0 Video', modeName: 'Video to Video', supportsImageUpload: true, supportsVideoUpload: true, requiresVideoInput: true, imageInputKey: 'first_frame_url', imageInputMode: 'single', videoInputKey: 'reference_video_urls', videoInputMode: 'array', params: wan30Params, creditEstimator: wan30VideoCreditEstimator() },
   { id: 'wan/3-0-video-prime', name: 'Wan 3.0 Video Prime V2V', provider: 'Wan', category: 'video-to-video', familyId: 'wan-3-prime', familyName: 'Wan 3.0 Video Prime', modeName: 'Video to Video', supportsImageUpload: true, supportsVideoUpload: true, requiresVideoInput: true, imageInputKey: 'first_frame_url', imageInputMode: 'single', videoInputKey: 'reference_video_urls', videoInputMode: 'array', params: wan30Params, creditEstimator: wan30VideoCreditEstimator(true) },
   { id: 'bytedance/seedance-2-5', name: 'Seedance 2.5 V2V', provider: 'Bytedance', category: 'video-to-video', familyId: 'bytedance-seedance-2-5', familyName: 'Seedance 2.5', modeName: 'Video to Video', supportsImageUpload: true, supportsVideoUpload: true, requiresVideoInput: true, imageInputKey: 'first_frame_url', imageInputMode: 'single', videoInputKey: 'reference_video_urls', videoInputMode: 'array', params: seedance25Params, creditEstimator: seedance25CreditEstimator },
   { id: 'pixverse-v6/extend', name: 'PixVerse V6 Extend', provider: 'PixVerse', category: 'video-to-video', familyId: 'pixverse-v6', familyName: 'PixVerse V6', modeName: 'Extend', allowsPromptlessGeneration: true, supportsVideoUpload: true, videoInputKey: 'video_url', videoInputMode: 'single', params: pixverseExtendParams, creditEstimator: pixverseCreditEstimator },
-  { id: 'grok-imagine/video-upscale', name: 'Grok Video Upscale', provider: 'xAI', category: 'video-to-video', supportsVideoUpload: true, videoInputKey: 'video_url', videoInputMode: 'single', params: topazVideoUpscaleParams, creditEstimator: grokVideoUpscaleCreditEstimator },
-  { id: 'grok-imagine/video-extend', name: 'Grok Video Extend', provider: 'xAI', category: 'video-to-video', supportsVideoUpload: true, videoInputKey: 'video_url', videoInputMode: 'single', params: grokImageToVideoParams, creditEstimator: grokVideoCreditEstimator },
-  { id: 'topaz/video-upscale', name: 'Topaz Video Upscale', provider: 'Topaz', category: 'video-to-video', supportsVideoUpload: true, videoInputKey: 'video_url', videoInputMode: 'single', params: topazVideoUpscaleParams },
-  { id: 'happyhorse/video-edit', name: 'HappyHorse Video Edit', provider: 'HappyHorse', category: 'video-to-video', supportsVideoUpload: true, videoInputKey: 'video_url', videoInputMode: 'single', params: happyHorseVideoParams, creditEstimator: happyHorse11CreditEstimator },
+  { id: 'grok-imagine/video-upscale', name: 'Grok Video Upscale', provider: 'xAI', category: 'video-to-video', allowsPromptlessGeneration:true, params:grokUpscaleParams, creditEstimator: grokVideoUpscaleCreditEstimator },
+  { id: 'grok-imagine/video-extend', name: 'Grok Video Extend', provider: 'xAI', category: 'video-to-video', params:grokExtendParams, creditEstimator: grokVideoCreditEstimator },
+  { id: 'topaz/video-upscale', name: 'Topaz Video Upscale', provider: 'Topaz', category: 'video-to-video', supportsVideoUpload: true, videoInputKey: 'video_url', videoInputMode: 'single', params: topazVideoUpscaleParams, creditEstimator:{creditsPerSecondByParam:{key:'upscale_factor',values:{'1':8,'2':8,'4':14}},sourceVideoDurationOnly:true} },
+  { id: 'happyhorse/video-edit', name: 'HappyHorse Video Edit', provider: 'HappyHorse', category: 'video-to-video', supportsVideoUpload: true, videoInputKey: 'video_url', videoInputMode: 'single', params:[{name:'Reference Images',key:'reference_image',type:'file',accept:'image/*',multiple:true,maxFiles:5,defaultValue:[]},{name:'Resolution',key:'resolution',type:'select',options:['720p','1080p'].map(value=>({label:value,value})),defaultValue:'1080p'},{name:'Audio',key:'audio_setting',type:'select',options:['auto','origin'].map(value=>({label:value,value})),defaultValue:'auto'}], creditEstimator:{...happyHorse10CreditEstimator,sourceVideoDurationOnly:true} },
   { id: 'kling-3.0/video', name: 'Kling 3.0 V2V', provider: 'Kuaishou', category: 'video-to-video', familyId: 'kling-3', familyName: 'Kling 3.0', modeName: 'Video to Video', supportsVideoUpload: true, params: kling30Params, creditEstimator: kling30CreditEstimator },
   { id: 'gemini-omni-video', name: 'Gemini Omni V2V', provider: 'Google', category: 'video-to-video', familyId: 'google-gemini-omni', familyName: 'Google Omni', modeName: 'Video to Video', supportsImageUpload: true, supportsVideoUpload: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: geminiOmniVideoParams, creditEstimator: geminiOmniCreditEstimator },
   { id: 'google/gemini-omni-flash-1-1', name: 'Gemini Omni 1.1 Flash V2V', provider: 'Google', category: 'video-to-video', familyId: 'google-gemini-omni-flash-1-1', familyName: 'Gemini Omni 1.1 Flash', modeName: 'Video to Video', supportsImageUpload: true, supportsVideoUpload: true, requiresVideoInput: true, imageInputKey: 'image_urls', imageInputMode: 'array', params: geminiOmniFlash11Params, creditEstimator: geminiOmniFlash11CreditEstimator },
@@ -1532,22 +1515,27 @@ export const SUPPORTED_MODELS: AIModel[] = [
 // This is the small, reviewed frontier of the Kie catalog. Add an entry here
 // whenever a model is added or re-priced, then run `npm run check:catalog`.
 export const KIE_CATALOG: KieCatalogEntry[] = [
-  { id: 'grok-imagine-image-2-0', category: 'text-to-image', sourceUrl: 'https://kie.ai/grok-imagine-image-2', verifiedAt: '2026-09-02', requiresCreditEstimate: true },
-  { id: 'grok-imagine-image-2-0', category: 'image-to-image', sourceUrl: 'https://kie.ai/grok-imagine-image-2', verifiedAt: '2026-09-02', requiresCreditEstimate: true },
-  { id: 'qwen3/text-to-image', category: 'text-to-image', sourceUrl: 'https://kie.ai/qwen-image-3', verifiedAt: '2026-09-02', requiresCreditEstimate: true },
-  { id: 'qwen3/image-to-image', category: 'image-to-image', sourceUrl: 'https://kie.ai/qwen-image-3', verifiedAt: '2026-09-02', requiresCreditEstimate: true },
-  { id: 'qwen3/pro-image-to-image', category: 'image-to-image', sourceUrl: 'https://kie.ai/qwen-image-3', verifiedAt: '2026-09-02', requiresCreditEstimate: true },
-  { id: 'nano-banana-2-lite', category: 'text-to-image', sourceUrl: 'https://kie.ai/nano-banana-2-lite', verifiedAt: '2026-09-02', requiresCreditEstimate: true },
-  { id: 'nano-banana-2-lite', category: 'image-to-image', sourceUrl: 'https://kie.ai/nano-banana-2-lite', verifiedAt: '2026-09-02', requiresCreditEstimate: true },
-  { id: 'minimax-h3/text-to-video', category: 'text-to-video', sourceUrl: 'https://kie.ai/minimax-h3', verifiedAt: '2026-09-02', requiresCreditEstimate: true },
-  { id: 'minimax-h3/reference-to-video', category: 'image-to-video', sourceUrl: 'https://kie.ai/minimax-h3', verifiedAt: '2026-09-02', requiresCreditEstimate: true },
-  { id: 'wan/3-0-video', category: 'text-to-video', sourceUrl: 'https://kie.ai/wan-3', verifiedAt: '2026-09-02', requiresCreditEstimate: true },
-  { id: 'wan/3-0-video-prime', category: 'text-to-video', sourceUrl: 'https://kie.ai/wan-3', verifiedAt: '2026-09-02', requiresCreditEstimate: true },
-  { id: 'google/gemini-omni-flash-1-1', category: 'text-to-video', sourceUrl: 'https://kie.ai/gemini-omni-flash-1-1', verifiedAt: '2026-09-02', requiresCreditEstimate: true },
-  { id: 'kling-3.0-omni/text-to-video', category: 'text-to-video', sourceUrl: 'https://kie.ai/kling-o3', verifiedAt: '2026-09-02', requiresCreditEstimate: true },
+  { id: 'kling-4.0/keyframe-to-video', category: 'text-to-video', sourceUrl: 'https://kie.ai/kling-4-0', verifiedAt: '2026-11-03', requiresCreditEstimate: true },
+  { id: 'kling-4.0/keyframe-to-video', category: 'image-to-video', sourceUrl: 'https://kie.ai/kling-4-0', verifiedAt: '2026-11-03', requiresCreditEstimate: true },
+  { id: 'kling-4.0/reference-to-video', category: 'image-to-video', sourceUrl: 'https://kie.ai/kling-4-0', verifiedAt: '2026-11-03', requiresCreditEstimate: true },
+  { id: 'grok-imagine-image-2-0', category: 'text-to-image', sourceUrl: 'https://kie.ai/grok-imagine-image-2', verifiedAt: '2026-10-24', requiresCreditEstimate: true },
+  { id: 'grok-imagine-image-2-0', category: 'image-to-image', sourceUrl: 'https://kie.ai/grok-imagine-image-2', verifiedAt: '2026-10-24', requiresCreditEstimate: true },
+  { id: 'qwen3/text-to-image', category: 'text-to-image', sourceUrl: 'https://kie.ai/qwen-image-3', verifiedAt: '2026-10-24', requiresCreditEstimate: true },
+  { id: 'qwen3/image-to-image', category: 'image-to-image', sourceUrl: 'https://kie.ai/qwen-image-3', verifiedAt: '2026-10-24', requiresCreditEstimate: true },
+  { id: 'qwen3/pro-image-to-image', category: 'image-to-image', sourceUrl: 'https://kie.ai/qwen-image-3', verifiedAt: '2026-10-24', requiresCreditEstimate: true },
+  { id: 'nano-banana-2-lite', category: 'text-to-image', sourceUrl: 'https://kie.ai/nano-banana-2-lite', verifiedAt: '2026-10-24', requiresCreditEstimate: true },
+  { id: 'nano-banana-2-lite', category: 'image-to-image', sourceUrl: 'https://kie.ai/nano-banana-2-lite', verifiedAt: '2026-10-24', requiresCreditEstimate: true },
+  { id: 'minimax-h3/text-to-video', category: 'text-to-video', sourceUrl: 'https://kie.ai/minimax-h3', verifiedAt: '2026-10-24', requiresCreditEstimate: true },
+  { id: 'minimax-h3/reference-to-video', category: 'image-to-video', sourceUrl: 'https://kie.ai/minimax-h3', verifiedAt: '2026-10-24', requiresCreditEstimate: true },
+  { id: 'wan/3-0-video', category: 'text-to-video', sourceUrl: 'https://kie.ai/wan-3', verifiedAt: '2026-10-24', requiresCreditEstimate: true },
+  { id: 'wan/3-0-video-prime', category: 'text-to-video', sourceUrl: 'https://kie.ai/wan-3', verifiedAt: '2026-10-24', requiresCreditEstimate: true },
+  { id: 'google/gemini-omni-flash-1-1', category: 'text-to-video', sourceUrl: 'https://kie.ai/gemini-omni-flash-1-1', verifiedAt: '2026-10-24', requiresCreditEstimate: true },
+  { id: 'kling-3.0-omni/text-to-video', category: 'text-to-video', sourceUrl: 'https://kie.ai/kling-o3', verifiedAt: '2026-10-24', requiresCreditEstimate: true },
 ];
 
 export interface GenerationLog {
+  productionShotId?: string;
+  sourceMediaUrls?: string[];
   generationJobId?: string;
   providerTaskId?: string;
   normalizedStatus?: string;

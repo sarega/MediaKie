@@ -4,11 +4,17 @@ Kai Media Studio is a local creative studio for generating images, videos and sp
 
 ## Creative studio update
 
-Navigation is now Home, Image, Video, Library, Projects and Settings. Create from a bottom composer with model search and contextual controls; open Parameters or Activity only when needed. The result inspector supports download, remix and compatible image-to-video/reference/edit/frame workflows.
+Navigation is now Home, Image, Video, Audio, Studio, Library, Projects and Settings. Create from a bottom composer with model search and contextual controls; open Parameters or Activity only when needed. The result inspector supports download, remix and compatible image-to-video/reference/edit/frame workflows.
 
 To animate a saved image: open **Library → Images → Animate → I2V**, choose a model from the filtered browser, describe the movement and Generate. **Use as reference** selects reference-to-video instead. You can also select the workflow in the composer and upload a starting image or first/last frames directly.
 
-Library supports image/video, status and text filters. Video posters are cached automatically using an existing `ffmpeg` installation (`FFMPEG_PATH` may override its location); browser frame loading is the fallback.
+Library now stores imported images, videos and audio alongside individual generated outputs. Import media, rename assets, assign character/location/style/storyboard/video/voice/music roles, add tags and filter by type, role or source. Open asset details to reuse media as a compatible generation input. Select assets for ZIP export or deletion; files still used as recorded generation inputs are protected. Recent generations and running jobs remain in Home/Activity.
+
+Project backups include `production.json` and local media. Clearing generation history retains imported assets. Library metadata uses revision checks; if another tab changes it, reload the library before retrying an edit. Video posters use an existing `ffmpeg` installation (`FFMPEG_PATH` may override its location); optional technical metadata uses `ffprobe` (`FFPROBE_PATH` may override its location). No new dependency is required.
+
+**Studio → Overview / Board / Edit** adds saved scenes and shots, named references, direction fields, model parameters with request JSON, cost-confirmed batch generation, take notes and explicit approvals. Save project edits; unsaved drafts survive navigation in the same browser session. New takes never replace approvals or existing sequence clips. Assets referenced by the Board, take notes or sequence cannot be deleted through Library or Activity.
+
+In Edit, append approved takes or choose Library clips, reorder/trim/split them and place voice/music with offsets, volume and mute. Export a local MP4 with audio using installed FFmpeg + ffprobe, or download a delivery ZIP containing original selected media and a JSON edit manifest. Completed MP4s and sequence provenance are saved to Library. Render tracking is local and transient: after a server restart, export again; provider generation jobs remain durable. Delivery ZIPs are not native Premiere/Resolve projects.
 
 Configure Kie.ai and Higgsfield under **Settings → Providers**, or set server environment variables. Higgsfield uses `HF_API_KEY_ID` plus `HF_API_KEY_SECRET` (or `HF_CREDENTIALS=key-id:key-secret`). Secrets are never returned by the settings API. Legacy browser Kie keys migrate to server storage on first successful load.
 
@@ -19,13 +25,17 @@ npm run lint
 npm test
 npm run build
 npm run check:improvements
+npm run check:library
+npm run check:production
 ```
 
 The tests mock provider calls and do not generate paid media. Existing history and media remain in place. Back up `data/` before upgrading. New durable jobs/settings use additional JSON files in that directory; no SQL migration is necessary.
 
 ## Version
 
-Current version: `2.2.0`
+Production workflow roadmap and phase handoff: [Production Workflow Handoff](docs/PRODUCTION_WORKFLOW_HANDOFF.md).
+
+Current version: `2.3.0`
 
 ## What is included
 
@@ -103,6 +113,16 @@ npm run check:improvements
 
 ## Update log
 
+### 2.3.0 — 2026-11-03
+
+- Added Production Studio with scenes, shots, reusable references, generation takes, explicit approvals and saved project drafts.
+- Added sequence editing, trimming/splitting, voice/music placement, local FFmpeg MP4 export and delivery ZIPs with edit manifests.
+- Expanded Library to imported and generated image/video/audio assets, roles, tags, rename, reuse, protected deletion and project backups.
+- Added Library image selection and video-frame capture for first/last/reference inputs, plus collapsible controls for larger previews on small screens.
+- Updated existing Kie model wire IDs, Veo market requests with legacy job recovery, input validation, fractional credit estimates and public-price fixtures.
+- Added Kling 4.0 text, first/middle/last keyframe and image/video reference workflows, 3–30 second duration, 720p/1080p and current Kie pricing with source-video billing rules.
+- Added offline API/pricing regressions and isolated production/library workflow checks. Named Kling 4.0 elements/voices remain unsupported; paid provider generation has not been tested.
+
 ### 2.2.0 — 2026-10-02
 
 - Remembered the last model and workflow independently for each project and each Image, Video, and Audio workspace.
@@ -170,3 +190,38 @@ npm run check:improvements
 - Added a setting to turn video autoplay on or off.
 - Stopped videos from autoplaying by default.
 - Refreshed credits after app reloads and completed generations.
+
+### Kie API / pricing snapshot (2026-10-24)
+
+Existing models use the current Kie wire IDs and Veo market API for new jobs. Persisted legacy Veo jobs retain their original polling route. Credit estimates preserve fractional credits and include verified source-duration/HD costs; unknown input dimensions, auto durations and unpublished rates remain unknown. Audio shows published unit rates; final charges are recorded only when Kie reports `creditsConsumed`.
+
+`npm run check:kie-api` verifies request migration with mocks. `npm run check:credits` also checks 86 public-price fixtures dated 2026-10-24. No paid provider calls are needed. See [the catalog review and implementation notes](docs/KIE_CATALOG_REVIEW_2026-10-24.md).
+
+### Preview on smaller screens
+
+In the Image/Video workspace, **Hide controls** collapses the prompt, uploads and generation settings so the preview can use the available height. **Show controls** restores the same draft. **New creation** opens the controls again. Single results fit the preview area; multiple results keep their scrolling grid.
+
+Layout regression check (use an isolated completed-video fixture): at 1280×720, hide controls and confirm the video grows within the viewport; restore controls and confirm prompt, duration and resolution are unchanged. Check Enter on the toggle, New creation reopening the controls, and no horizontal overflow at 640×720. Verified in Chrome with a local MP4 and no paid generation.
+
+### Reusing images and video frames
+
+- Each image input offers **Library / Video frame** alongside **Upload**. Choose a project image or open a project video, seek to a still (or use **Start of clip / End of clip**), and press **Use this frame** to fill that input.
+- **Use video frame…** on a result or Library video starts at the current preview position. After capturing, choose **First frame**, **End frame** or **Reference image**, then a compatible destination model. **Send image to model…** does the same for Library images. Sending fills the input without starting generation.
+- Reference inputs append images up to the model's limit; single-frame inputs replace their own image. Switching workflows within the same model keeps attached files. Cross-model transfers preserve the requested role rather than silently converting an end frame to a first frame.
+
+The picker uses the current project's Library. Remote videos must allow browser frame extraction; otherwise import the downloaded clip into Library first. Captured stills remain in the current draft until used for generation.
+
+`npm run check:media` covers role mapping, reference-only models, file limits and end-of-clip time boundaries. Chrome fixture checks cover independent first/end inputs, cross-model end-frame routing, captured plus Library reference arrays in JSON, current-playhead preservation, Escape, and 1280×720 / 640×720 layouts. No paid provider generation is included.
+
+### Kling update — 2026-11-03
+
+Kling 4.0 is available under Video: Text to Video, Keyframes (first/middle/last), and Reference (up to 10 images and 5 videos, 15 combined). Duration: 3–30 seconds; resolutions: 720p / 1080p. Mention supplied inputs as `@first_frame`, `@keyframe_1`, `@last_frame`, `@image_1` or `@video_1`. Keyframes require a first frame when any frames are supplied, with at most min(duration + 1, 10) total frames. Named elements/voice references are not exposed in this workspace yet. Reference video clips must each be 2–30 seconds; check source clips before submitting.
+
+Verified against https://kie.ai/pricing and https://docs.kie.ai/market/kling/v4-keyframe-to-video and https://docs.kie.ai/market/kling/v4-reference-to-video:
+
+| Kling 4.0 | 720p credits/second | 1080p credits/second |
+| --- | ---: | ---: |
+| Text, keyframes, references without video | 28.5 | 42.5 |
+| References with video | 17 | 25.5 |
+
+With video, billed seconds = max(total input video seconds, output seconds) + output seconds. Unknown source duration yields an unknown estimate. These are Kie credits, not Kling subscription credits. Existing Kling 2.6, 3.0, O3 text/image and Turbo rates match their current Kie model pages; their values remain unchanged. Offline request/pricing regressions run in `check:kie-api`; no paid generation was used for verification.

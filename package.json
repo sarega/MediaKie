@@ -1,7 +1,7 @@
 {
   "name": "kai-media-studio",
   "private": true,
-  "version": "2.2.0",
+  "version": "2.3.0",
   "type": "module",
   "scripts": {
     "dev": "tsx server.ts",
@@ -12,13 +12,16 @@
     "lint": "tsc --noEmit",
     "check:improvements": "npm run build && node scripts/check-improvements.mjs && npm run check:polling",
     "check:polling": "tsx scripts/check-kie-polling.ts",
+    "check:kie-api": "node --import tsx scripts/check-kie-api.ts",
     "check:credits": "tsx scripts/verify-credit-estimates.ts",
     "check:catalog": "tsx scripts/check-kie-catalog.ts",
     "check:providers": "node --import tsx scripts/check-providers.ts",
     "check:generation": "node --import tsx scripts/check-generation.ts",
-    "test": "npm run check:providers && npm run check:generation && npm run check:polling && npm run check:credits && npm run check:catalog && npm run check:media && npm run check:h3-ir",
+    "test": "npm run check:providers && npm run check:kie-api && npm run check:generation && npm run check:polling && npm run check:credits && npm run check:catalog && npm run check:media && npm run check:h3-ir && npm run check:production",
     "check:media": "node --import tsx scripts/check-media-workflows.ts",
-    "check:h3-ir": "node --import tsx scripts/check-h3-ir.ts"
+    "check:h3-ir": "node --import tsx scripts/check-h3-ir.ts",
+    "check:library": "npm run build && node scripts/check-production-library.mjs",
+    "check:production": "node --import tsx scripts/check-production.ts && npm run check:library"
   },
   "dependencies": {
     "@google/genai": "^2.4.0",

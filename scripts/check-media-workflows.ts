@@ -48,3 +48,24 @@ try{
  console.log('Workflow filters, reference mapping, real video thumbnail extraction and cache checks passed.');
  }
 }finally{await fs.rm(directory,{recursive:true,force:true});}
+
+// Transfers must target the requested input, including array-valued references.
+const {imageDestination, appendImageValues, lastFrameTime} = await import('../src/models/imageInputs');
+const h3 = get('minimax-h3/image-to-video');
+assert.equal(imageDestination(h3, 'first')?.param?.key, 'first_frame_url');
+assert.equal(imageDestination(h3, 'last')?.param?.key, 'last_frame_url');
+assert.equal(imageDestination(h3, 'last')?.workflow, 'frames');
+assert.equal(imageDestination(get('minimax-h3/reference-to-video'), 'reference')?.param?.key, 'reference_image_urls');
+assert.equal(imageDestination(get('minimax-h3/text-to-video'), 'last'), null, 'Never silently send an end frame to the first-frame input');
+const referenceParam = get('minimax-h3/reference-to-video').params!.find(p => p.key === 'reference_image_urls')!;
+assert.deepEqual(appendImageValues({...referenceParam, maxFiles: 2}, ['one'], ['two', 'three']), ['one', 'two']);
+assert.deepEqual(appendImageValues(referenceParam, ['one'], ['one', 'two']), ['one', 'two']);
+assert.equal(appendImageValues(imageDestination(h3, 'last')!.param!, 'old', ['new']), 'new');
+assert.equal(lastFrameTime(Infinity), 0);
+assert.equal(lastFrameTime(0), 0);
+assert.equal(lastFrameTime(10), 9.999);
+assert.ok(lastFrameTime(0.0001) >= 0);
+console.log('First/end/reference routing, reference limits, replacement and end-of-clip time checks passed.');
+assert.equal(imageDestination(get('minimax-h3/reference-to-video'), 'first'), null, 'Reference-only models cannot anchor a first frame');
+assert.equal(imageDestination(get('happyhorse/reference-to-video'), 'reference')?.workflow, 'reference', 'Reference models with generic image inputs remain available');
+assert.equal(imageDestination(get('happyhorse/video-edit'), 'reference')?.workflow, 'video-to-video', 'A reference must not hide the required source-video workflow');

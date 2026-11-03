@@ -10,6 +10,7 @@ export interface Cost {
 export interface Mapping {
     provider: ProviderId;
     modelId: string;
+    apiVersion?: 'market';
     source?: string;
     verifiedAt?: string;
     parameters?: ModelParamConfig[];
@@ -28,12 +29,33 @@ const soulParams: ModelParamConfig[] = [
     { key: 'enhance_prompt', name: 'Enhance prompt', type: 'boolean', defaultValue: true },
 ];
 const hfSource = (id: string) => `https://open.higgsfield.ai/models/${id}/api-reference`;
+// Keep local IDs stable for saved projects; only the provider's wire IDs change.
+const kieIds: Record<string, string> = {
+    'veo-3.1': 'veo-3-1',
+    'kling/2-6-text-to-video': 'kling-2.6/text-to-video',
+    'kling/2-6-image-to-video': 'kling-2.6/image-to-video',
+    'kling/2-5-turbo-text-to-video-pro': 'kling/v2-5-turbo-text-to-video-pro',
+    'kling/2-5-turbo-image-to-video-pro': 'kling/v2-5-turbo-image-to-video-pro',
+    'kling/2-1-master-text-to-video': 'kling/v2-1-master-text-to-video',
+    'kling/2-1-master-image-to-video': 'kling/v2-1-master-image-to-video',
+    'kling/2-1-pro': 'kling/v2-1-pro',
+    'kling/2-1-standard': 'kling/v2-1-standard',
+    'grok-imagine/video-upscale': 'grok-imagine/upscale',
+    'grok-imagine/video-extend': 'grok-imagine/extend',
+    'hailuo/2-3-pro-image-to-video': 'hailuo/2-3-image-to-video-pro',
+    'hailuo/2-3-standard-image-to-video': 'hailuo/2-3-image-to-video-standard',
+    'wan/2-7-video-edit': 'wan/2-7-videoedit',
+    'volcengine-video-to-video-lip-sync': 'volcengine/video-to-video-lip-sync',
+};
 export const MODEL_REGISTRY: RegistryModel[] = KIE_MODELS.map(model => {
     const logicalId = `${[model.name, model.modeName].filter(Boolean).join('-').toLowerCase().replace(/[^a-z0-9]+/g, '-')}:${model.category}`;
-    const mappings: Mapping[] = [{ provider: 'kie', modelId: model.id }];
+    const apiId = model.id === 'grok-imagine-image-2-0' ? `grok-imagine-image-2-0/${model.category === 'text-to-image' ? 'text-to-image' : 'image-edit'}` : kieIds[model.id] || model.id;
+    const mappings: Mapping[] = [{ provider: 'kie', modelId: apiId, apiVersion: 'market' }];
     if (model.id === 'kling/2-5-turbo-image-to-video-pro')
         mappings.push({ provider: 'higgsfield', modelId: 'kling-video/v2.5-turbo/pro/image-to-video', source: hfSource('kling-video/v2.5-turbo/pro/image-to-video'), verifiedAt: '2026-09-21', parameters: [select('duration', 'Duration', [5, 10]), { key: 'cfg_scale', name: 'CFG', type: 'slider', min: 0, max: 1, step: 0.01, defaultValue: 0.5 }, { key: 'negative_prompt', name: 'Negative prompt', type: 'text', defaultValue: '' }] });
-    return { ...model, logicalId, mappings };
+    const unavailableReason = ['kling/2-1-pro', 'kling/2-1-standard'].includes(model.id) && model.category === 'text-to-video'
+        ? 'Kie documents this endpoint as image-to-video only. Choose Kling 2.1 Master for text-to-video.' : undefined;
+    return { ...model, logicalId, mappings, unavailableReason };
 });
 MODEL_REGISTRY.push(...(['standard', 'v2/standard'] as const).map((variant): RegistryModel => {
     const id = `higgsfield-ai/soul/${variant}`;
@@ -83,8 +105,11 @@ export function validateParameters(model: RegistryModel, input: Record<string, a
         const value = input[p.key];
         if (value == null || value === '')
             continue;
-        if (p.options && !p.options.some(o => String(o.value) === String(value)))
-            throw new Error(`Invalid ${p.name}`);
+        if (p.options) {
+            const values = p.multiple ? value : [value];
+            if (!Array.isArray(values) || p.maxItems != null && values.length > p.maxItems || values.some(v => !p.options!.some(o => String(o.value) === String(v))))
+                throw new Error(`Invalid ${p.name}`);
+        }
         if (['number', 'slider'].includes(p.type) && (!Number.isFinite(Number(value)) || (p.min != null && Number(value) < p.min) || (p.max != null && Number(value) > p.max)))
             throw new Error(`Invalid ${p.name}`);
         if (p.type === 'boolean' && typeof value !== 'boolean')

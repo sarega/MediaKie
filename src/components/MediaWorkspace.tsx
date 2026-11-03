@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { AIModel, GenerationLog, ModelParamConfig, estimateModelCredits } from '../types';
-import { AlertCircle, Sparkles, Upload, Download, FolderOpen, Loader2, Settings2, Wallet, Link2, Copy, Search, Check, Film, Scissors, Play, Pause, Trash2, StepBack, StepForward, PanelLeftOpen, PanelRightOpen } from 'lucide-react';
+import { AlertCircle, Sparkles, Upload, Download, FolderOpen, Loader2, Settings2, Wallet, Link2, Copy, Search, Check, Film, Scissors, Play, Pause, Trash2, StepBack, StepForward, PanelLeftOpen, PanelRightOpen, PanelBottomClose, PanelBottomOpen } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
 import {WORKFLOWS,firstImageParameter,type Workflow} from '../models/workflows';
@@ -8,10 +8,15 @@ import { ComposerControls } from '../ui/composer/Controls';
 import { resolveModel, parametersFor, type RoutingPolicy, type ProviderId } from '../models/registry';
 import { jsonRequest } from '../generation/client';
 import { ClypraEditorHost } from './ClypraEditorHost';
+import {MediaSourcePicker} from './MediaSourcePicker';
+import {appendImageValues} from '../models/imageInputs';
 
 const USE_CLYPRA_EDITOR = import.meta.env.VITE_USE_CLYPRA_EDITOR === 'true';
 
 interface Props {
+  projectId: string | null;
+  onUseVideoFrame: (url: string, time: number) => void;
+  onUseImage: (url: string) => void;
   workflow:Workflow;
   onWorkflowChange:(workflow:Workflow)=>void;
   onInspect?: () => void;
@@ -22,7 +27,7 @@ interface Props {
   onGenerate: (prompt: string, imageBase64?: string, videoBase64?: string, params?: Record<string, any>) => Promise<void>;
   isSubmitting: boolean;
   latestLog?: GenerationLog;
-  sourceAsset?: { id: string; type: 'image' | 'video'; url: string; label?: string; parameterKey?: string } | null;
+  sourceAsset?: { id: string; type: 'image' | 'video' | 'audio'; url: string; label?: string; parameterKey?: string } | null;
   isCompactLayout?: boolean;
   onOpenModelPane?: () => void;
   onOpenActivityPane?: () => void;
@@ -60,11 +65,13 @@ const previewJsonValue = (value: any): any => {
 
 const isLocalLibraryUrl = (url: string) => url.startsWith('/library/') || url.startsWith('/projects/');
 
-export function MediaWorkspace({ workflow,onWorkflowChange,onInspect, onStartNew, remix, selectedModel: baseModel, autoplayVideos, onGenerate, isSubmitting, latestLog, sourceAsset, isCompactLayout = false, onOpenModelPane, onOpenActivityPane, onRevealFile }: Props) {
+export function MediaWorkspace({ projectId, onUseVideoFrame, onUseImage, workflow,onWorkflowChange,onInspect, onStartNew, remix, selectedModel: baseModel, autoplayVideos, onGenerate, isSubmitting, latestLog, sourceAsset, isCompactLayout = false, onOpenModelPane, onOpenActivityPane, onRevealFile }: Props) {
   const [policy,setPolicy] = useState<RoutingPolicy>('auto');
   const [provider,setProvider] = useState('kie');
   const selectedModel = useMemo(()=>({...baseModel,params:parametersFor(baseModel,policy==='manual'?provider as ProviderId:undefined)}),[baseModel,policy,provider]);
   const [workspaceMode, setWorkspaceMode] = useState<'create' | 'edit'>('create');
+  const [showControls, setShowControls] = useState(true);
+  const [imagePicker, setImagePicker] = useState<ModelParamConfig | 'source' | null>(null);
   const [prompt, setPrompt] = useState('');
   const [h3PromptMode,setH3PromptMode] = useState<H3PromptMode>(()=>{
     const saved=localStorage.getItem('kie_h3_prompt_mode');
@@ -122,10 +129,12 @@ export function MediaWorkspace({ workflow,onWorkflowChange,onInspect, onStartNew
   });
 
   useEffect(() => {
-    const modelKey = `${selectedModel.category}:${selectedModel.id}:${policy==='manual'?provider:'auto'}:${workflow}`;
+    const inputModelKey = `${selectedModel.category}:${selectedModel.id}:${policy==='manual'?provider:'auto'}`;
+    const modelKey = `${inputModelKey}:${workflow}`;
     const storageKey = `kie_model_params:${modelKey}`;
 
     if (initializedModelRef.current !== modelKey) {
+      const preserveFiles = initializedModelRef.current.startsWith(`${inputModelKey}:`);
       initializedModelRef.current = modelKey;
       let saved: Record<string, any> = {};
       try {
@@ -133,9 +142,9 @@ export function MediaWorkspace({ workflow,onWorkflowChange,onInspect, onStartNew
       } catch {
         localStorage.removeItem(storageKey);
       }
-      setParamValues(Object.fromEntries((selectedModel.params || []).map((param) => [
+      setParamValues(current => Object.fromEntries((selectedModel.params || []).map((param) => [
         param.key,
-        param.type !== 'file' && param.key in saved ? saved[param.key] : param.defaultValue,
+        param.type === 'file' && preserveFiles ? current[param.key] ?? param.defaultValue : param.type !== 'file' && param.key in saved ? saved[param.key] : param.defaultValue,
       ])));
       return;
     }
@@ -148,7 +157,13 @@ export function MediaWorkspace({ workflow,onWorkflowChange,onInspect, onStartNew
 
   useEffect(() => {
     if (!sourceAsset) return;
-    if (sourceAsset.parameterKey) {setParamValues(current=>({...current,[sourceAsset.parameterKey!]:sourceAsset.url}));return;}
+    setShowControls(true);
+    if (sourceAsset.parameterKey) {
+      const param = selectedModel.params?.find(p => p.key === sourceAsset.parameterKey && p.type === 'file');
+      if (param) setParamValues(current=>({...current,[param.key]:appendImageValues(param,current[param.key],[sourceAsset.url])}));
+      return;
+    }
+    if (sourceAsset.type === 'audio') return;
     const isSupported = sourceAsset.type === 'image'
       ? selectedModel.supportsImageUpload
       : selectedModel.supportsVideoUpload;
@@ -290,15 +305,7 @@ export function MediaWorkspace({ workflow,onWorkflowChange,onInspect, onStartNew
 
   const appendParamFiles = (param: ModelParamConfig, values: string[]) => {
     if (values.length === 0) return;
-    setParamValues((current) => {
-      if (!param.multiple) {
-        return { ...current, [param.key]: values[0] };
-      }
-
-      const maxFiles = param.maxFiles ?? Number.POSITIVE_INFINITY;
-      const existing = valuesAsArray(current[param.key]) as string[];
-      return { ...current, [param.key]: [...existing, ...values].slice(0, maxFiles) };
-    });
+    setParamValues(current => ({...current, [param.key]: appendImageValues(param, current[param.key], values)}));
   };
 
   const removeParamFile = (param: ModelParamConfig, index: number) => {
@@ -604,14 +611,14 @@ export function MediaWorkspace({ workflow,onWorkflowChange,onInspect, onStartNew
       const urls = latestLog.mediaUrls && latestLog.mediaUrls.length > 0 ? latestLog.mediaUrls : [latestLog.mediaUrl!];
       
       return (
-        <div className="relative w-full h-full overflow-y-auto custom-scrollbar p-8">
-          <div className={`grid gap-6 items-center justify-center min-h-full ${urls.length > 1 ? 'grid-cols-1 md:grid-cols-2 lg:grid-cols-3' : 'grid-cols-1'}`}>
+        <div className="relative w-full h-full overflow-y-auto custom-scrollbar p-3 sm:p-4">
+          <div className={`grid gap-6 items-center justify-center ${urls.length > 1 ? 'min-h-full grid-cols-1 md:grid-cols-2 lg:grid-cols-3' : 'h-full min-h-0 grid-cols-1 grid-rows-1'}`}>
             {urls.map((url, idx) => (
-              <div key={idx} className="relative group/item flex flex-col items-center justify-center">
+              <div key={idx} className={cn('relative group/item flex flex-col items-center justify-center', urls.length === 1 && 'h-full min-h-0')}>
                 {latestLog.type === 'video' ? (
                   <video 
                     src={url} 
-                    className="max-w-full max-h-[70vh] rounded-lg shadow-2xl ring-1 ring-white/10 object-contain"
+                    className={cn('max-w-full rounded-lg shadow-2xl ring-1 ring-white/10 object-contain', urls.length === 1 ? 'h-full w-full min-h-0 max-h-full' : 'max-h-[70vh]')}
                     controls 
                     autoPlay={autoplayVideos}
                     loop 
@@ -620,11 +627,18 @@ export function MediaWorkspace({ workflow,onWorkflowChange,onInspect, onStartNew
                   <img 
                     src={url} 
                     alt="Generated Result" 
-                    className="max-w-full max-h-[70vh] rounded-lg shadow-2xl ring-1 ring-white/10 object-contain"
+                    className={cn('max-w-full rounded-lg shadow-2xl ring-1 ring-white/10 object-contain', urls.length === 1 ? 'min-h-0 max-h-full' : 'max-h-[70vh]')}
                   />
                 )}
                 
-                <div className="absolute top-4 right-4 flex gap-2 opacity-100 transition-opacity md:opacity-0 md:group-hover/item:opacity-100 group-focus-within/item:opacity-100">
+                <div className="absolute top-4 right-4 flex flex-wrap justify-end gap-2">
+                  <button type="button" className="rounded-lg border border-violet-400/40 bg-neutral-900/90 px-3 py-2 text-xs text-violet-200 shadow" onClick={event => {
+                    if (latestLog.type === 'video') {
+                      const video = event.currentTarget.parentElement?.parentElement?.querySelector('video');
+                      video?.pause();
+                      onUseVideoFrame(url, video?.currentTime || 0);
+                    } else onUseImage(url);
+                  }}>{latestLog.type === 'video' ? 'Use video frame…' : 'Send image…'}</button>
                   {onRevealFile && isLocalLibraryUrl(url) && (
                     <button
                       type="button"
@@ -917,8 +931,20 @@ export function MediaWorkspace({ workflow,onWorkflowChange,onInspect, onStartNew
           </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          {latestLog && <button onClick={onStartNew} className="rounded-lg border border-neutral-800 px-3 py-2 text-sm text-neutral-300 hover:bg-neutral-800">New creation</button>}
+        <div className="flex flex-wrap items-center gap-2">
+          {workspaceMode === 'create' && (
+            <button
+              type="button"
+              onClick={() => setShowControls(value => !value)}
+              aria-expanded={showControls}
+              aria-controls="media-generation-controls"
+              className="flex items-center gap-2 rounded-lg border border-neutral-700 px-3 py-2 text-sm text-neutral-200 hover:bg-neutral-800"
+            >
+              {showControls ? <PanelBottomClose className="h-4 w-4" /> : <PanelBottomOpen className="h-4 w-4" />}
+              {showControls ? 'Hide controls' : 'Show controls'}
+            </button>
+          )}
+          {latestLog && <button onClick={() => {setShowControls(true); onStartNew?.();}} className="rounded-lg border border-neutral-800 px-3 py-2 text-sm text-neutral-300 hover:bg-neutral-800">New creation</button>}
           {latestLog?.mediaUrl && <button onClick={onInspect} className="text-sm text-violet-300 px-2">Inspect result</button>}
           {workspaceMode === 'create' && selectedModel.params && selectedModel.params.length > 0 && (
             <button
@@ -1252,8 +1278,9 @@ export function MediaWorkspace({ workflow,onWorkflowChange,onInspect, onStartNew
                             input.click();
                           }}
                         >
-                          {param.multiple ? 'Select Files' : 'Select File'}
+                          {param.multiple ? 'Upload files' : 'Upload file'}
                         </button>
+                        {param.accept?.includes('image') && <button type="button" className="rounded-md border border-violet-500/40 px-3 py-1.5 text-sm text-violet-200" onClick={() => setImagePicker(param)}>Library / Video frame</button>}
                         {valuesAsArray(paramValues[param.key]).length > 0 && (
                           <div className="flex items-center gap-1">
                             <span className="text-xs text-green-400 truncate w-20">
@@ -1282,7 +1309,7 @@ export function MediaWorkspace({ workflow,onWorkflowChange,onInspect, onStartNew
       </div>
 
       {/* 3. Input Controls Base (Fixed at bottom) */}
-      {workspaceMode === 'create' && <div className="relative z-20 w-full shrink-0 max-h-[60vh] overflow-y-auto px-3 sm:px-4 pb-4 pt-0">
+      {workspaceMode === 'create' && <div id="media-generation-controls" hidden={!showControls} className="relative z-20 w-full shrink-0 max-h-[60vh] overflow-y-auto px-3 sm:px-4 pb-4 pt-0">
         <div className="mx-auto flex w-full max-w-5xl flex-col gap-3 rounded-2xl border border-neutral-800/80 bg-neutral-900/90 p-3 shadow-2xl backdrop-blur-xl">
           
           <div className="flex flex-wrap items-center gap-3"><label className="text-xs text-neutral-400">Workflow <select aria-label="Generation workflow" value={workflow} onChange={e=>onWorkflowChange(e.target.value as Workflow)} className="ml-2 rounded-lg border border-violet-500/30 bg-neutral-950 px-3 py-2 text-violet-200">{WORKFLOWS.filter(w=>w.id!=='all'&&(w.modality==='all'||w.modality===(selectedModel.category.includes('video')?'video':'image'))).map(w=><option key={w.id} value={w.id}>{w.label}</option>)}</select></label><span className="text-xs text-neutral-500">{WORKFLOWS.find(w=>w.id===workflow)?.hint}</span></div>
@@ -1298,9 +1325,19 @@ export function MediaWorkspace({ workflow,onWorkflowChange,onInspect, onStartNew
             {h3Error&&<p className="mt-2 text-xs text-red-300">{h3Error} · Start open-h3-ir locally or switch this option off.</p>}
             {h3Compilation&&<details className="mt-3 rounded-lg border border-neutral-800 bg-neutral-950/70 p-3 text-xs"><summary className="cursor-pointer text-violet-200">Compiled shot plan · {h3Compilation.plan?.shots?.length||0} shots</summary><div className="mt-3 space-y-2 text-neutral-400">{h3Compilation.plan?.shots?.map(shot=><div key={shot.n}><span className="text-neutral-200">{shot.from}s–{shot.to}s</span> · {shot.what_happens}<span className="text-neutral-500"> · {shot.camera}</span></div>)||<p>Context-IR is ready.</p>}<details><summary className="cursor-pointer text-neutral-300">View compiled Context-IR</summary><pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-black p-3 text-[10px]">{h3Compilation.prompt}</pre></details></div></details>}
           </div>}
-          {!['text-to-video','text-to-image'].includes(workflow) && (selectedModel.params||[]).filter(p=>p.type==='file'&&p.accept?.includes('image')&&(/reference|first_frame|last_frame|start_frame|end_frame/.test(p.key))).length>0 && <div className="flex gap-3 overflow-x-auto py-1">{(selectedModel.params||[]).filter(p=>p.type==='file'&&p.accept?.includes('image')&&(/reference|first_frame|last_frame|start_frame|end_frame/.test(p.key))).map(param=><div key={param.key} className="shrink-0 rounded-lg border border-neutral-700 p-2 min-w-32"><label className="text-xs text-neutral-300 block">{param.name}<input aria-label={`Upload ${param.name}`} className="block max-w-48 mt-2 text-[10px]" type="file" accept={param.accept} multiple={param.multiple} onChange={async e=>{const files=Array.from(e.target.files||[]);appendParamFiles(param,await Promise.all(files.map(toBase64)));e.target.value='';}}/></label><div className="flex gap-1 mt-2">{valuesAsArray(paramValues[param.key]).map((url,index)=><button key={index} onClick={()=>removeParamFile(param,index)} aria-label={`Remove ${param.name} ${index+1}`} title="Remove image"><img src={String(url)} alt={param.name} className="w-14 h-12 object-cover rounded"/></button>)}</div></div>)}</div>}
+          {!['text-to-video','text-to-image'].includes(workflow) && <div className="flex flex-wrap gap-3">
+            {(selectedModel.params || []).filter(p => p.type === 'file' && p.accept?.includes('image') && (/reference|first_frame|last_frame|start_frame|end_frame|tail_image|keyframe/.test(p.key) || selectedModel.id === 'kling-4.0/reference-to-video' && p.key === 'image_urls')).map(param => <div key={param.key} className="min-w-40 rounded-lg border border-neutral-700 p-2" onDragOver={e => {if (e.dataTransfer.types.includes('application/x-kie-media')) e.preventDefault();}} onDrop={e => applyParamSourceDrop(e, param)}>
+              <p className="mb-2 text-xs font-medium text-neutral-200">{param.name}</p>
+              <div className="flex flex-wrap gap-2">
+                <button type="button" aria-label={`Choose ${param.name} from Library or video`} className="rounded-lg border border-violet-500/40 px-3 py-2 text-xs text-violet-200 hover:bg-violet-500/10" disabled={!!param.multiple && valuesAsArray(paramValues[param.key]).length >= (param.maxFiles ?? Infinity)} onClick={() => setImagePicker(param)}>Library / Video frame</button>
+                <label className="cursor-pointer rounded-lg border border-neutral-700 px-3 py-2 text-xs text-neutral-400 focus-within:ring-2 focus-within:ring-violet-400">Upload<input aria-label={`Upload ${param.name}`} className="sr-only" type="file" accept={param.accept} multiple={param.multiple} onChange={async e => {const files=Array.from(e.target.files || []); appendParamFiles(param, await Promise.all(files.map(toBase64))); e.target.value='';}}/></label>
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">{valuesAsArray(paramValues[param.key]).map((url,index) => <div key={index} className="flex items-center gap-1"><img src={String(url)} alt={`${param.name} ${index+1}`} className="h-14 w-20 rounded object-cover"/><button type="button" onClick={() => removeParamFile(param,index)} aria-label={`Remove ${param.name} ${index+1}`} className="p-1 text-neutral-400 hover:text-white">×</button></div>)}</div>
+            </div>)}
+          </div>}
+
           <div className="flex min-w-0 flex-1 flex-col gap-3 lg:flex-row lg:items-end">
-            {!['text-to-video','text-to-image'].includes(workflow) && (selectedModel.supportsImageUpload || selectedModel.supportsVideoUpload) && !firstImageParameter(selectedModel,workflow) && (
+            {!['text-to-video','text-to-image'].includes(workflow) && (selectedModel.supportsImageUpload || selectedModel.supportsVideoUpload) && (!firstImageParameter(selectedModel,workflow) || selectedModel.supportsVideoUpload && !selectedModel.supportsImageUpload) && (
               <div
                 className="flex shrink-0 flex-wrap gap-2 rounded-xl"
                 onDragOver={(e) => {
@@ -1331,8 +1368,9 @@ export function MediaWorkspace({ workflow,onWorkflowChange,onInspect, onStartNew
                   className="group flex h-16 w-20 flex-col items-center justify-center gap-1 rounded-xl border border-dashed border-neutral-700 text-neutral-400 transition-all hover:border-neutral-500 hover:bg-neutral-800"
                 >
                   <Upload className="w-5 h-5 group-hover:-translate-y-1 transition-transform" />
-                  <span className="text-xs font-medium text-center leading-tight">{workflow==='image-to-video'?'Add starting image':workflow==='reference'?'Add reference':selectedModel.supportsVideoUpload&&!selectedModel.supportsImageUpload?'Add video':'Add image'}</span>
+                  <span className="text-xs font-medium text-center leading-tight">{['image-to-video','frames'].includes(workflow)?'Add starting image':workflow==='reference'?'Add reference':selectedModel.supportsVideoUpload&&!selectedModel.supportsImageUpload?'Add video':'Add image'}</span>
                 </button>
+                {selectedModel.supportsImageUpload && <button type="button" className="rounded-xl border border-violet-500/40 px-3 py-2 text-xs text-violet-200" onClick={() => setImagePicker('source')}>Library / Video frame</button>}
                 <input
                   type="file"
                   ref={fileInputRef}
@@ -1407,6 +1445,11 @@ export function MediaWorkspace({ workflow,onWorkflowChange,onInspect, onStartNew
           )}
         </div>
       </div>}
+      {imagePicker && <MediaSourcePicker projectId={projectId} title={`Choose ${imagePicker === 'source' ? (['image-to-video','frames'].includes(workflow) ? 'First frame' : 'Reference image') : imagePicker.name}`} onClose={() => setImagePicker(null)} onChoose={url => {
+        if (imagePicker === 'source') applySourceUrl('image', url);
+        else appendParamFiles(imagePicker, [url]);
+        setShowControls(true); setImagePicker(null);
+      }}/>}
     </div>
   );
 }

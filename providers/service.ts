@@ -92,6 +92,7 @@ export async function installProviders(app: Express, dataDir: string, assertPubl
         const model = findModel(body.logicalModel);
         if (!model)
             throw new Error('Unknown logical model');
+        if (model.unavailableReason) throw new Error(model.unavailableReason);
         if (!body.input || typeof body.input !== 'object' || Array.isArray(body.input))
             throw new Error('Settings must be an object');
         if (body.sourceDuration !== undefined && (typeof body.sourceDuration !== 'number' || !Number.isFinite(body.sourceDuration) || body.sourceDuration < 0))
@@ -119,6 +120,9 @@ export async function installProviders(app: Express, dataDir: string, assertPubl
             throw new Error('Prompt is required');
         if (!/^[a-zA-Z0-9_-]+$/.test(req.body.projectId || ''))
             throw new Error('Project is required');
+        const sourceMediaUrls = req.body.sourceMediaUrls || [];
+        if (!Array.isArray(sourceMediaUrls) || sourceMediaUrls.length > 100 || sourceMediaUrls.some((url: unknown) => typeof url !== 'string' || url.length > 500 || !/^\/(?:library\/[^/?#]+|projects\/[a-zA-Z0-9_-]+\/library\/[^/?#]+)$/.test(url)))
+            throw new Error('Invalid local source media');
         const preparedInput = adapters[mapping.provider].prepare(model, input);
         if (config.spendCap !== null) {
             const reserved = jobs.reduce((sum, j) => sum + (j.finalCost?.usd ?? j.estimatedCost.usd ?? 0), 0);
@@ -128,6 +132,11 @@ export async function installProviders(app: Express, dataDir: string, assertPubl
                 throw new Error('Local estimated spend cap reached');
         }
         const job: Job = { id: crypto.randomUUID(), historyId: typeof req.body.historyId === 'string' ? req.body.historyId : undefined, logicalModel: model.logicalId, provider: mapping.provider, mapping, prompt: input.prompt || '', settings: preparedInput, estimatedCost: estimate, taskId: '', status: 'queued', outputs: [], createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), projectId: req.body.projectId };
+        job.sourceMediaUrls = [...new Set<string>(sourceMediaUrls)];
+        if (req.body.productionShotId !== undefined) {
+            if (typeof req.body.productionShotId !== 'string' || !/^[a-zA-Z0-9_-]{1,100}$/.test(req.body.productionShotId)) throw new Error('Invalid production shot');
+            job.productionShotId = req.body.productionShotId;
+        }
         jobs.push(job);
         await saveJobs();
         res.status(202).json(job);
@@ -242,6 +251,7 @@ export async function installProviders(app: Express, dataDir: string, assertPubl
     }));
     return {
         kieKey,
+        inputReferences: () => jobs.filter(j => !j.hidden).map(j => ({id:j.historyId || j.id, projectId:j.projectId, modelName:j.logicalModel, sourceMediaUrls:j.sourceMediaUrls})),
         hideProjectJobs: async (projectId: string, historyIds?: string[]) => {
             const selected = historyIds ? new Set(historyIds) : null;
             let changed = false;
